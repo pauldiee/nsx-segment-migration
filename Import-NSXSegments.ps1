@@ -689,6 +689,7 @@ Write-Host @"
 +==================================================+
 |   Import-NSXSegments.ps1  v2.2                   |
 |   Compatible with NSX 4.x and 9.x                |
+|   www.hollebollevsan.nl                          |
 +==================================================+
 "@ -ForegroundColor Cyan
 

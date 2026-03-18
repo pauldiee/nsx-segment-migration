@@ -4,7 +4,8 @@ A set of three PowerShell scripts to export, import, and clean up NSX segments a
 
 **Compatible with NSX 4.x and NSX 9.x.**
 
-> By [Paul van Dieen](https://www.hollebollevsan.nl)
+By Paul van Dieen
+[www.hollebollevsan.nl](https://www.hollebollevsan.nl)
 
 ---
 
