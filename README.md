@@ -34,7 +34,7 @@ A set of three PowerShell scripts to export, import, and clean up NSX segments a
 .\Export-NSXSegments.ps1 -NSXManager nsx-source.corp.local -SkipCertCheck
 ```
 
-Select which segments to export from the interactive menu. Two files are written:
+On first run you will be prompted for your username and password, then asked whether to save them for future runs. Select which segments to export from the interactive menu. Two files are written:
 
 - `nsx-export_<timestamp>.json` — full object data for the importer
 - `nsx-export_<timestamp>.csv` — name-mapping table; edit before importing
@@ -76,17 +76,35 @@ The script will prompt you to:
 
 ---
 
-## Saving Credentials
+## Credentials
 
-All three scripts accept a `-Credential` parameter. Save your credential once to avoid being prompted on every run:
+All three scripts handle credentials the same way:
+
+**First run (no saved credential):**
+```
+  NSX username: admin
+  NSX password: ********
+  Save credential for future runs? (Y/N): Y
+  Credential saved to: C:\Users\paul\.nsx_cred_nsx_source_corp_local.xml
+```
+
+**Subsequent runs (saved credential found):**
+```
+  Saved credential found for 'nsx-source.corp.local' (user: admin)
+  [1] Use saved credential
+  [2] Enter new credential and save over existing
+  [3] Enter new credential without saving
+
+  Select: 1
+```
+
+Credentials are saved per NSX Manager, so source and target environments each have their own file. The files are encrypted with Windows DPAPI and can only be decrypted by your Windows user account on the same machine.
+
+To bypass the interactive flow entirely, pass a credential object directly:
 
 ```powershell
-# Save (encrypted with Windows DPAPI - only readable by your account on this machine)
-Get-Credential | Export-Clixml -Path "$env:USERPROFILE\nsx-cred.xml"
-
-# Use
-$cred = Import-Clixml -Path "$env:USERPROFILE\nsx-cred.xml"
-.\Export-NSXSegments.ps1 -NSXManager nsx.corp.local -Credential $cred -SkipCertCheck
+$cred = Import-Clixml "$env:USERPROFILE\.nsx_cred_nsx_source_corp_local.xml"
+.\Export-NSXSegments.ps1 -NSXManager nsx-source.corp.local -Credential $cred -SkipCertCheck
 ```
 
 ---
@@ -98,7 +116,7 @@ $cred = Import-Clixml -Path "$env:USERPROFILE\nsx-cred.xml"
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `-NSXManager` | Yes | — | FQDN or IP of the source NSX Manager |
-| `-Credential` | No | Prompted | PSCredential for the NSX admin account |
+| `-Credential` | No | Interactive | PSCredential for the NSX admin account |
 | `-OutputBase` | No | `./nsx-export_<timestamp>` | Base path for output files (no extension) |
 | `-SegmentFilter` | No | `*` | Wildcard filter on segment display_name |
 | `-SkipCertCheck` | No | — | Bypass TLS certificate validation |
@@ -134,7 +152,7 @@ $cred = Import-Clixml -Path "$env:USERPROFILE\nsx-cred.xml"
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `-NSXManager` | Yes | — | FQDN or IP of the target NSX Manager |
-| `-Credential` | No | Prompted | PSCredential for the NSX admin account |
+| `-Credential` | No | Interactive | PSCredential for the NSX admin account |
 | `-InputPath` | Yes | — | Path to the `.json` file from Export |
 | `-MappingPath` | No | Same path as InputPath with `.csv` extension | Explicit path to the CSV name-mapping file |
 | `-TransportZoneId` | No | Interactive menu | Transport zone id to apply to all imported segments |
@@ -189,7 +207,7 @@ Missing values trigger an interactive prompt before any import begins. VLAN-back
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `-NSXManager` | Yes | — | FQDN or IP of the NSX Manager |
-| `-Credential` | No | Prompted | PSCredential for the NSX admin account |
+| `-Credential` | No | Interactive | PSCredential for the NSX admin account |
 | `-SegmentFilter` | No | `*` | Wildcard filter on segment display_name |
 | `-SkipCertCheck` | No | — | Bypass TLS certificate validation |
 | `-WhatIf` | No | — | Preview all deletions without making any API calls |
@@ -246,6 +264,34 @@ Import-Certificate -FilePath "your-internal-ca.cer" `
 ```
 
 Once your CA is trusted, `-SkipCertCheck` is no longer needed.
+
+---
+
+## Changelog
+
+### v2.1 — Export / v2.2 — Import / v1.2 — Remove
+- Added built-in credential save and reset. On first run credentials are prompted and optionally saved per NSX Manager using Windows DPAPI encryption. Subsequent runs offer to reuse, overwrite, or ignore the saved credential.
+- Replaced `Get-Credential` with `Read-Host` prompts to fix null credential errors in non-interactive PowerShell hosts.
+- Fixed `PropertyNotFoundException` crash under `Set-StrictMode -Version Latest` when `Get-Credential` returned null.
+
+### v2.1 — Import
+- Added interactive transport zone selection menu after connecting to the target NSX.
+- Added overlay segment validation: prompts for missing gateway and subnet before import begins when an OVERLAY_BACKED transport zone is selected.
+
+### v2.0 — Export / Import
+- Full rewrite with clean comments and consistent style.
+- Added `Get-AllPages` pagination support.
+- Profile binding maps now exported and imported via typed child paths (`segment-discovery-profile-binding-maps`, `segment-security-profile-binding-maps`, `segment-qos-profile-binding-maps`).
+- NSX 4.x and 9.x profile path formats handled automatically.
+- Profile path remap table ensures binding maps reference the correct renamed paths on the target.
+
+### v1.1 — Remove
+- Added port count check before confirmation prompt.
+- Fixed extra confirmation prompts caused by `ConfirmImpact = 'High'`.
+- Binding map deletion no longer triggers `ShouldProcess` prompts.
+
+### v1.0 — Remove
+- Initial release of Remove-NSXSegments.ps1.
 
 ---
 

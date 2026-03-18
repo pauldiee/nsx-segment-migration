@@ -1,40 +1,47 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Exports NSX segments, custom segment profiles, and profile bindings to a
-    JSON + CSV file pair for use with Import-NSXSegments.ps1.
+    Exports NSX segments, custom segment profiles, and profile binding maps
+    to a JSON + CSV file pair for use with Import-NSXSegments.ps1.
 
 .DESCRIPTION
     Connects to the source NSX Manager and produces two files:
 
-      <OutputBase>.json  - All exported objects (segments, profiles, bindings).
-                           This file is the input to Import-NSXSegments.ps1.
+      <OutputBase>.json  - All exported objects consumed by Import-NSXSegments.ps1.
+      <OutputBase>.csv   - Name-mapping table. Edit the NewName column for any
+                           object you want renamed on the target NSX. Leave
+                           NewName = OldName to keep the existing name.
 
-      <OutputBase>.csv   - Name-mapping table, pre-filled with OldName = NewName.
-                           Edit the NewName column for any object you want renamed
-                           on the target NSX, then leave all others unchanged.
+    An interactive menu lets you select exactly which segments to export.
+    All custom profiles and binding maps referenced by the selection are
+    included automatically.
 
-    After connecting, an interactive menu lets you choose which segments to
-    export. Only the profiles and bindings referenced by your selection are
-    included in the output.
+    Credentials
+    -----------
+    On first run you are prompted for username and password, then asked whether
+    to save them for future runs. Saved credentials are stored per NSX Manager
+    as an encrypted XML file in your profile directory (Windows DPAPI). On
+    subsequent runs a menu offers to reuse, overwrite, or ignore the saved
+    credential. Pass -Credential to bypass the interactive flow entirely.
 
     NSX version compatibility
     -------------------------
     NSX 4.x stores profiles under  /infra/segment-profiles/<type>/
     NSX 9.x stores profiles under  /infra/<type>/
-    Both formats are tried automatically.
+    Both formats are tried automatically; the first that responds is used.
 
-    Profile binding maps (the link between a segment and its custom profiles)
-    are stored as typed child resources of the segment:
-      segment-discovery-profile-binding-maps  (IP Discovery, MAC Discovery)
-      segment-security-profile-binding-maps   (Segment Security, SpoofGuard)
-      segment-qos-profile-binding-maps        (QoS)
+    Profile binding map types
+    -------------------------
+    segment-discovery-profile-binding-maps  (IP Discovery, MAC Discovery)
+    segment-security-profile-binding-maps   (Segment Security, SpoofGuard)
+    segment-qos-profile-binding-maps        (QoS)
 
 .PARAMETER NSXManager
     FQDN or IP address of the source NSX Manager.
 
 .PARAMETER Credential
-    PSCredential for the NSX Manager admin account. Prompted if omitted.
+    PSCredential for the NSX Manager admin account.
+    If omitted, the built-in credential manager handles prompting and saving.
 
 .PARAMETER OutputBase
     Base path (without extension) for the output files.
@@ -47,26 +54,42 @@
 
 .PARAMETER SkipCertCheck
     Bypass TLS certificate validation. Use for self-signed certificates.
+    For internal CA certificates, import the CA root into the Windows Trusted
+    Root store instead: Import-Certificate -FilePath ca.cer
+    -CertStoreLocation Cert:\LocalMachine\Root
 
 .EXAMPLE
     .\Export-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck
 
 .EXAMPLE
     .\Export-NSXSegments.ps1 -NSXManager nsx.corp.local `
-        -OutputBase ./exports/prod-migration `
         -SegmentFilter "prod-*" `
+        -OutputBase ./exports/prod-migration `
         -SkipCertCheck
 
 .OUTPUTS
-    <OutputBase>.json  - Segment + profile data consumed by Import-NSXSegments.ps1
+    <OutputBase>.json  - Object data consumed by Import-NSXSegments.ps1
     <OutputBase>.csv   - Name-mapping table; edit NewName column before importing
 
 .NOTES
-    Version : 2.0
+    Version : 2.1
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Import-NSXSegments.ps1
     Author  : Paul van Dieen
     Blog    : https://www.hollebollevsan.nl
+    GitHub  : https://github.com/pauldiee/nsx-segment-migration
+
+    Changelog
+    ---------
+    2.1 - Added built-in credential save/reset via Resolve-Credential.
+          Replaced Get-Credential with Read-Host to fix null credential errors
+          in non-interactive PowerShell hosts under Set-StrictMode.
+    2.0 - Full rewrite. Clean comments, consistent style.
+          Profile binding maps exported via typed child paths.
+          NSX 4.x and 9.x profile path formats handled automatically.
+          Cursor-based pagination via Get-AllPages.
+    1.x - Initial versions. Interactive segment selection menu.
+          CSV name-mapping table. JSON export format.
 #>
 
 [CmdletBinding()]
@@ -91,6 +114,7 @@ $ErrorActionPreference = 'Stop'
 # =============================================================================
 
 function Get-BasicAuthHeader {
+    # Builds the Authorization and Content-Type headers for every API call.
     param([System.Management.Automation.PSCredential]$Cred)
     $pair    = "$($Cred.UserName):$($Cred.GetNetworkCredential().Password)"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
@@ -98,8 +122,10 @@ function Get-BasicAuthHeader {
 }
 
 function Set-TlsSkipCert {
-    # ServicePointManager requires a compiled .NET delegate in PS5 / .NET 4.x.
-    # A PowerShell scriptblock assigned to the callback is silently ignored there.
+    # Disables TLS certificate validation for environments with self-signed certs.
+    # Uses a compiled .NET delegate because assigning a PowerShell scriptblock to
+    # ServicePointManager.ServerCertificateValidationCallback is silently ignored
+    # under PS5 / .NET 4.x. The compiled approach works on both PS5 and PS7.
     if (-not ([System.Management.Automation.PSTypeName]'CertIgnore').Type) {
         Add-Type @"
 using System.Net;
@@ -119,8 +145,8 @@ public static class CertIgnore {
 }
 
 function Invoke-NSXApi {
-    # Issues a REST call to the NSX Manager and returns the parsed JSON response.
-    # Throws on any non-2xx HTTP status so callers can use try/catch.
+    # Issues a single REST call to the NSX Manager and returns the parsed JSON
+    # response. Throws on any non-2xx HTTP status so callers can use try/catch.
     param([string]$Path, [string]$Method = 'GET')
     $params = @{
         Uri             = "https://$NSXManager$Path"
@@ -144,7 +170,8 @@ function Invoke-NSXApi {
 }
 
 function Get-AllPages {
-    # Iterates cursor-based pagination and returns all results as a flat array.
+    # Follows NSX cursor-based pagination and returns all results as a flat array.
+    # NSX returns a 'cursor' field in the response when more pages are available.
     param([string]$Path)
     $results = @()
     $cursor  = $null
@@ -164,9 +191,9 @@ function Get-AllPages {
 }
 
 function Select-Segments {
-    # Presents a numbered list and returns the segments chosen by the operator.
-    # Accepts: individual numbers, comma-separated numbers, ranges (e.g. 1-5),
-    # or * for all.
+    # Presents a numbered, sorted segment list and returns the operator's selection.
+    # Input formats accepted: individual numbers, comma-separated, ranges (1-5),
+    # mixed (1,3,7-10), or * for all.
     param([array]$Segments)
 
     $sorted = @($Segments | Sort-Object display_name)
@@ -242,13 +269,91 @@ function Select-Segments {
     return @($selected)
 }
 
+function Get-SavedCredential {
+    # Loads a saved credential from disk if one exists for the given NSX Manager.
+    # Credentials are stored per-manager so switching between environments works
+    # without them overwriting each other.
+    # Returns the PSCredential, or $null if no saved credential exists.
+    param([string]$Manager)
+    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    if (Test-Path $path) {
+        try { return Import-Clixml -Path $path }
+        catch { return $null }
+    }
+    return $null
+}
+
+function Save-Credential {
+    # Saves a credential to disk encrypted with Windows DPAPI.
+    # The file is named after the NSX Manager so each manager has its own file.
+    # Only the current Windows user account on this machine can decrypt it.
+    param([System.Management.Automation.PSCredential]$Cred, [string]$Manager)
+    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    $Cred | Export-Clixml -Path $path
+    Write-Host "      Credential saved to: $path" -ForegroundColor Gray
+}
+
+function Resolve-Credential {
+    # Central credential resolution. Resolution order:
+    #   1. -Credential supplied on the command line  -> use as-is, no prompts
+    #   2. Saved credential file found for this NSX Manager -> offer to use or reset
+    #   3. No credential available -> prompt for username/password, offer to save
+    param([System.Management.Automation.PSCredential]$Supplied, [string]$Manager)
+
+    if ($Supplied) { return $Supplied }
+
+    $saved = Get-SavedCredential -Manager $Manager
+
+    if ($saved) {
+        Write-Host ""
+        Write-Host "  Saved credential found for '$Manager' (user: $($saved.UserName))" -ForegroundColor Cyan
+        Write-Host "  [1] Use saved credential"
+        Write-Host "  [2] Enter new credential and save over existing"
+        Write-Host "  [3] Enter new credential without saving"
+        Write-Host ""
+
+        while ($true) {
+            $choice = (Read-Host "  Select").Trim()
+            switch ($choice) {
+                '1' { Write-Host "  Using saved credential." -ForegroundColor Green
+                      Write-Host ""; return $saved }
+                '2' { $cred = Read-NSXCredential
+                      Save-Credential -Cred $cred -Manager $Manager
+                      return $cred }
+                '3' { return Read-NSXCredential }
+                default { Write-Host "  Enter 1, 2 or 3" -ForegroundColor Red }
+            }
+        }
+    }
+
+    # No saved credential - prompt then offer to save
+    $cred = Read-NSXCredential
+    Write-Host ""
+    $save = (Read-Host "  Save credential for future runs? (Y/N)").Trim()
+    if ($save -eq 'Y' -or $save -eq 'y') {
+        Save-Credential -Cred $cred -Manager $Manager
+    }
+    Write-Host ""
+    return $cred
+}
+
+function Read-NSXCredential {
+    # Prompts for username and password using Read-Host.
+    # Read-Host is used instead of Get-Credential because Get-Credential can
+    # return null in some PowerShell hosts under Set-StrictMode, which causes
+    # a PropertyNotFoundException on the first property access.
+    $user = Read-Host "  NSX username"
+    $pass = Read-Host "  NSX password" -AsSecureString
+    return [System.Management.Automation.PSCredential]::new($user, $pass)
+}
+
 # =============================================================================
 #  MAIN
 # =============================================================================
 
 Write-Host @"
 +==================================================+
-|   Export-NSXSegments.ps1  v2.0                   |
+|   Export-NSXSegments.ps1  v2.1                   |
 |   Compatible with NSX 4.x and 9.x                |
 +==================================================+
 "@ -ForegroundColor Cyan
@@ -256,9 +361,7 @@ Write-Host @"
 $jsonPath = "$OutputBase.json"
 $csvPath  = "$OutputBase.csv"
 
-if (-not $Credential) {
-    $Credential = Get-Credential -Message "Enter credentials for NSX Manager ($NSXManager)"
-}
+$Credential = Resolve-Credential -Supplied $Credential -Manager $NSXManager
 if ($SkipCertCheck -and $PSVersionTable.PSVersion.Major -lt 6) { Set-TlsSkipCert }
 $script:Headers = Get-BasicAuthHeader -Cred $Credential
 
@@ -311,10 +414,10 @@ foreach ($ptype in $profileTypes.Keys) {
     foreach ($apiPath in $profileTypes[$ptype]) {
         try {
             $profiles = Get-AllPages -Path $apiPath
-            Write-Verbose "      [$ptype] resolved via $apiPath"
+            Write-Verbose "[$ptype] resolved via $apiPath"
             break
         } catch {
-            Write-Verbose "      [$ptype] not available at $apiPath"
+            Write-Verbose "[$ptype] not available at $apiPath"
         }
     }
     if (-not $profiles) {
@@ -383,7 +486,7 @@ foreach ($seg in $segments) {
                 }
             }
         } catch {
-            Write-Verbose "      /$bmType not available for '$($seg.display_name)'"
+            Write-Verbose "/$bmType not available for '$($seg.display_name)'"
         }
     }
 
@@ -396,7 +499,7 @@ foreach ($seg in $segments) {
 Write-Host "      Segments with profile bindings: $($bindingMaps.Count)"
 
 $export = [ordered]@{
-    export_version       = '2.0'
+    export_version       = '2.1'
     export_timestamp     = (Get-Date -Format 'o')
     source_manager       = $NSXManager
     source_version       = $ver.product_version

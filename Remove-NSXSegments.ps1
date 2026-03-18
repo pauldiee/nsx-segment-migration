@@ -28,6 +28,14 @@
       removed.
     - -WhatIf previews the full deletion plan without executing any API calls.
 
+    Credentials
+    -----------
+    On first run you are prompted for username and password, then asked whether
+    to save them for future runs. Saved credentials are stored per NSX Manager
+    as an encrypted XML file in your profile directory (Windows DPAPI). On
+    subsequent runs a menu offers to reuse, overwrite, or ignore the saved
+    credential. Pass -Credential to bypass the interactive flow entirely.
+
     NSX version compatibility
     -------------------------
     NSX 4.x stores profiles under  /infra/segment-profiles/<type>/
@@ -45,7 +53,8 @@
     FQDN or IP address of the NSX Manager.
 
 .PARAMETER Credential
-    PSCredential for the NSX Manager admin account. Prompted if omitted.
+    PSCredential for the NSX Manager admin account.
+    If omitted, the built-in credential manager handles prompting and saving.
 
 .PARAMETER SegmentFilter
     Wildcard applied to segment display_name before the selection menu appears.
@@ -53,6 +62,9 @@
 
 .PARAMETER SkipCertCheck
     Bypass TLS certificate validation. Use for self-signed certificates.
+    For internal CA certificates, import the CA root into the Windows Trusted
+    Root store instead: Import-Certificate -FilePath ca.cer
+    -CertStoreLocation Cert:\LocalMachine\Root
 
 .EXAMPLE
     # Interactive delete - choose segments and/or profiles to remove
@@ -67,17 +79,25 @@
     # Dry run - preview what would be deleted without touching NSX
     .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck -WhatIf
 
-.EXAMPLE
-    # Use a saved credential so you are not prompted each run
-    $cred = Import-Clixml "$env:USERPROFILE\nsx-cred.xml"
-    .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -Credential $cred -SkipCertCheck
-
 .NOTES
-    Version : 1.1
+    Version : 1.2
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Toolkit : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
     Author  : Paul van Dieen
     Blog    : https://www.hollebollevsan.nl
+    GitHub  : https://github.com/pauldiee/nsx-segment-migration
+
+    Changelog
+    ---------
+    1.2 - Added built-in credential save/reset via Resolve-Credential.
+          Replaced Get-Credential with Read-Host to fix null credential errors
+          in non-interactive PowerShell hosts under Set-StrictMode.
+    1.1 - Added port count check before confirmation prompt.
+          Fixed extra confirmation prompts by removing ConfirmImpact = High.
+          Binding map deletion no longer triggers ShouldProcess prompts.
+    1.0 - Initial release. Interactive segment and profile selection menus.
+          Automatic binding map removal before segment deletion.
+          Typed YES confirmation gate. WhatIf support.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -306,21 +326,115 @@ function Get-BindingMapsForSegment {
     return $found
 }
 
+function Get-SavedCredential {
+    # Loads a saved credential from disk if one exists for the given NSX Manager.
+    # Credentials are stored per-manager so switching between environments works
+    # without them overwriting each other.
+    # Returns the PSCredential, or $null if no saved credential exists.
+    param([string]$Manager)
+    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    if (Test-Path $path) {
+        try { return Import-Clixml -Path $path }
+        catch { return $null }
+    }
+    return $null
+}
+
+function Save-Credential {
+    # Saves a credential to disk encrypted with Windows DPAPI.
+    # The file is named after the NSX Manager so each manager has its own file.
+    # Only the current Windows user account on this machine can decrypt it.
+    param([System.Management.Automation.PSCredential]$Cred, [string]$Manager)
+    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    $Cred | Export-Clixml -Path $path
+    Write-Host "      Credential saved to: $path" -ForegroundColor Gray
+}
+
+function Remove-SavedCredential {
+    # Deletes the saved credential file for the given NSX Manager.
+    param([string]$Manager)
+    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    if (Test-Path $path) {
+        Remove-Item -Path $path -Force
+        Write-Host "      Saved credential removed." -ForegroundColor Gray
+    }
+}
+
+function Resolve-Credential {
+    # Central credential resolution used by all three scripts.
+    # Resolution order:
+    #   1. -Credential parameter supplied on the command line -> use as-is
+    #   2. Saved credential file found for this NSX Manager  -> offer to use or reset
+    #   3. No credential available                           -> prompt, then offer to save
+    param([System.Management.Automation.PSCredential]$Supplied, [string]$Manager)
+
+    # Command-line credential takes priority - no interaction needed
+    if ($Supplied) { return $Supplied }
+
+    $saved = Get-SavedCredential -Manager $Manager
+
+    if ($saved) {
+        Write-Host ""
+        Write-Host "  Saved credential found for '$Manager' (user: $($saved.UserName))" -ForegroundColor Cyan
+        Write-Host "  [1] Use saved credential"
+        Write-Host "  [2] Enter new credential and save over existing"
+        Write-Host "  [3] Enter new credential without saving"
+        Write-Host ""
+
+        while ($true) {
+            $choice = (Read-Host "  Select").Trim()
+            switch ($choice) {
+                '1' {
+                    Write-Host "  Using saved credential." -ForegroundColor Green
+                    Write-Host ""
+                    return $saved
+                }
+                '2' {
+                    $cred = Read-NSXCredential
+                    Save-Credential -Cred $cred -Manager $Manager
+                    return $cred
+                }
+                '3' {
+                    return Read-NSXCredential
+                }
+                default { Write-Host "  Enter 1, 2 or 3" -ForegroundColor Red }
+            }
+        }
+    }
+
+    # No saved credential - prompt and offer to save
+    $cred = Read-NSXCredential
+    Write-Host ""
+    $save = (Read-Host "  Save credential for future runs? (Y/N)").Trim()
+    if ($save -eq 'Y' -or $save -eq 'y') {
+        Save-Credential -Cred $cred -Manager $Manager
+    }
+    Write-Host ""
+    return $cred
+}
+
+function Read-NSXCredential {
+    # Prompts for username and password using Read-Host.
+    # Read-Host is used instead of Get-Credential because Get-Credential
+    # can return null in some PowerShell hosts and execution contexts.
+    $user = Read-Host "  NSX username"
+    $pass = Read-Host "  NSX password" -AsSecureString
+    return [System.Management.Automation.PSCredential]::new($user, $pass)
+}
+
 # =============================================================================
 #  MAIN
 # =============================================================================
 
 Write-Host @"
 +==================================================+
-|   Remove-NSXSegments.ps1  v1.1                   |
+|   Remove-NSXSegments.ps1  v1.2                   |
 |   Compatible with NSX 4.x and 9.x                |
 +==================================================+
 "@ -ForegroundColor Cyan
 
 # -- 1. Connect ---------------------------------------------------------------
-if (-not $Credential) {
-    $Credential = Get-Credential -Message "Enter credentials for NSX Manager ($NSXManager)"
-}
+$Credential = Resolve-Credential -Supplied $Credential -Manager $NSXManager
 if ($SkipCertCheck -and $PSVersionTable.PSVersion.Major -lt 6) { Set-TlsSkipCert }
 $script:Headers = Get-BasicAuthHeader -Cred $Credential
 
