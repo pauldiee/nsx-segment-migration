@@ -124,6 +124,7 @@
     2.2 - Added built-in credential save/reset via Resolve-Credential.
           Replaced Get-Credential with Read-Host to fix null credential errors
           in non-interactive PowerShell hosts under Set-StrictMode.
+          Added $ScriptMeta branding banner (Name, Author, Blog, Date).
     2.1 - Added interactive transport zone selection menu after connecting.
           Added overlay segment validation: prompts for missing gateway and
           subnet before import begins when OVERLAY_BACKED TZ is selected.
@@ -682,16 +683,30 @@ function Read-NSXCredential {
 }
 
 # =============================================================================
+#  SCRIPT METADATA
+# =============================================================================
+
+$ScriptMeta = @{
+    Name    = "Import-NSXSegments.ps1"
+    Version = "2.2"
+    Author  = "Paul van Dieen"
+    Blog    = "https://www.hollebollevsan.nl"
+    Date    = "2026-03-22"
+}
+
+# =============================================================================
 #  MAIN
 # =============================================================================
 
-Write-Host @"
-+==================================================+
-|   Import-NSXSegments.ps1  v2.2                   |
-|   Compatible with NSX 4.x and 9.x                |
-|   www.hollebollevsan.nl                          |
-+==================================================+
-"@ -ForegroundColor Cyan
+$bannerWidth = 62
+Write-Host ""
+Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
+Write-Host ("  {0,-30} {1}" -f $ScriptMeta.Name, ("v" + $ScriptMeta.Version)) -ForegroundColor Cyan
+Write-Host ("  Author : {0}" -f $ScriptMeta.Author) -ForegroundColor Cyan
+Write-Host ("  Blog   : {0}" -f $ScriptMeta.Blog) -ForegroundColor Cyan
+Write-Host ("  Date   : {0}" -f $ScriptMeta.Date) -ForegroundColor DarkGray
+Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
+Write-Host ""
 
 # -- 1. Load export JSON ------------------------------------------------------
 if (-not (Test-Path $InputPath)) { throw "Input file not found: $InputPath" }

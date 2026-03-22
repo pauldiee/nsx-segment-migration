@@ -84,6 +84,7 @@
     2.1 - Added built-in credential save/reset via Resolve-Credential.
           Replaced Get-Credential with Read-Host to fix null credential errors
           in non-interactive PowerShell hosts under Set-StrictMode.
+          Added $ScriptMeta branding banner (Name, Author, Blog, Date).
     2.0 - Full rewrite. Clean comments, consistent style.
           Profile binding maps exported via typed child paths.
           NSX 4.x and 9.x profile path formats handled automatically.
@@ -348,16 +349,30 @@ function Read-NSXCredential {
 }
 
 # =============================================================================
+#  SCRIPT METADATA
+# =============================================================================
+
+$ScriptMeta = @{
+    Name    = "Export-NSXSegments.ps1"
+    Version = "2.1"
+    Author  = "Paul van Dieen"
+    Blog    = "https://www.hollebollevsan.nl"
+    Date    = "2026-03-22"
+}
+
+# =============================================================================
 #  MAIN
 # =============================================================================
 
-Write-Host @"
-+==================================================+
-|   Export-NSXSegments.ps1  v2.1                   |
-|   Compatible with NSX 4.x and 9.x                |
-|   www.hollebollevsan.nl                          |
-+==================================================+
-"@ -ForegroundColor Cyan
+$bannerWidth = 62
+Write-Host ""
+Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
+Write-Host ("  {0,-30} {1}" -f $ScriptMeta.Name, ("v" + $ScriptMeta.Version)) -ForegroundColor Cyan
+Write-Host ("  Author : {0}" -f $ScriptMeta.Author) -ForegroundColor Cyan
+Write-Host ("  Blog   : {0}" -f $ScriptMeta.Blog) -ForegroundColor Cyan
+Write-Host ("  Date   : {0}" -f $ScriptMeta.Date) -ForegroundColor DarkGray
+Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
+Write-Host ""
 
 $jsonPath = "$OutputBase.json"
 $csvPath  = "$OutputBase.csv"

@@ -274,6 +274,7 @@ Once your CA is trusted, `-SkipCertCheck` is no longer needed.
 - Added built-in credential save and reset. On first run credentials are prompted and optionally saved per NSX Manager using Windows DPAPI encryption. Subsequent runs offer to reuse, overwrite, or ignore the saved credential.
 - Replaced `Get-Credential` with `Read-Host` prompts to fix null credential errors in non-interactive PowerShell hosts.
 - Fixed `PropertyNotFoundException` crash under `Set-StrictMode -Version Latest` when `Get-Credential` returned null.
+- Added `$ScriptMeta` branding banner (Name, Author, Blog, Date) consistent with other scripts in the toolkit.
 
 ### v2.1 — Import
 - Added interactive transport zone selection menu after connecting to the target NSX.
