@@ -1,0 +1,16 @@
+# Credentials - never commit
+*.cred
+*.xml
+creds/
+
+# Segment export output (runtime, may contain customer data)
+*.json
+*.csv
+
+# Logs / temp
+*.log
+*.tmp
+
+# Blog post drafts (local only)
+blogpost*.html
+blogpost*.md
