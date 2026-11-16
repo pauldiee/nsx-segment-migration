@@ -52,7 +52,18 @@
       - subnets            (gateway IP and prefix, e.g. 192.168.10.1/24)
     Missing values trigger an interactive prompt before any import begins.
     Pressing Enter at either prompt skips that field. VLAN-backed segments
-    skip this step entirely.
+    skip this step entirely. With -Disconnected the check is skipped.
+
+    Disconnected import (-Disconnected)
+    -----------------------------------
+    Imports every selected segment without a gateway connection: the
+    connectivity_path is removed before the PATCH, subnets are kept. Use it
+    for overlay subnets that keep their IP addresses in a side-by-side
+    migration without HCX, where the old Tier-1 keeps the gateway until the
+    cutover. NSX: "If a segment is not connected to a gateway, subnet is
+    optional"; connectivity can be changed from None to a Tier-0 or Tier-1
+    later. The summary lists each segment with the gateway to connect it to
+    at the cutover (the source gateway, Tier-1 renamed per the CSV).
 
     NSX version compatibility
     -------------------------
@@ -87,6 +98,12 @@
     interactive menu lets you choose from the transport zones on the target NSX.
     Press Enter at the menu to keep the transport zone from the export unchanged.
 
+.PARAMETER Disconnected
+    Import the selected segments without a gateway connection (removes
+    connectivity_path, keeps subnets) and skip the overlay gateway/subnet
+    prompts. The summary lists the gateway each segment had on the source
+    (Tier-1 renamed per the CSV), for connecting it at the cutover.
+
 .PARAMETER SkipCertCheck
     Bypass TLS certificate validation. Use for self-signed certificates.
     For internal CA certificates, import the CA root into the Windows Trusted
@@ -107,12 +124,18 @@
         -SkipCertCheck
 
 .EXAMPLE
+    # Side-by-side without HCX: create the segments disconnected, connect
+    # them to the target Tier-1 at the cutover
+    .\Import-NSXSegments.ps1 -NSXManager nsx9.corp.local `
+        -InputPath ./nsx-export_20260101_120000.json -Disconnected -WhatIf
+
+.EXAMPLE
     # Dry run - preview all changes without touching NSX
     .\Import-NSXSegments.ps1 -NSXManager nsx9.corp.local `
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 2.2
+    Version : 2.3
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -121,6 +144,11 @@
 
     Changelog
     ---------
+    2.3 - Added -Disconnected: imports the selected segments without a
+          gateway connection (connectivity_path removed, subnets kept),
+          skips the overlay gateway/subnet prompts, and ends with a list of
+          the gateway to connect each segment to at the cutover. Replaces
+          editing the export JSON by hand (#1).
     2.2 - Added built-in credential save/reset via Resolve-Credential.
           Replaced Get-Credential with Read-Host to fix null credential errors
           in non-interactive PowerShell hosts under Set-StrictMode.
@@ -151,6 +179,8 @@ param(
     [string]$MappingPath,
 
     [string]$TransportZoneId,
+
+    [switch]$Disconnected,
 
     [switch]$SkipCertCheck
 )
@@ -688,7 +718,7 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "2.2"
+    Version = "2.3"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-03-22"
@@ -830,10 +860,14 @@ Write-Host "      Transport zone type: $($script:SelectedTzType)"
 # fields that NSX requires: a gateway connection and a subnet. Any that are
 # missing trigger an interactive prompt so the operator can supply them before
 # the import begins. VLAN-backed segments skip this step entirely.
-if ($script:SelectedTzType -eq 'OVERLAY_BACKED') {
+if ($Disconnected) {
+    Write-Host "`n      -Disconnected: segments are imported without a gateway connection;" -ForegroundColor Cyan
+    Write-Host "      overlay gateway/subnet check skipped (subnets from the export are kept)." -ForegroundColor Cyan
+} elseif ($script:SelectedTzType -eq 'OVERLAY_BACKED') {
     Write-Host "`n      Checking overlay segment requirements ..." -ForegroundColor Cyan
     $selectedSegments = @(Confirm-OverlaySegmentConfig -Segments $selectedSegments)
 }
+$disconnectedList = [System.Collections.Generic.List[object]]::new()
 
 # -- 4. Import segment profiles -----------------------------------------------
 Write-Host "`n[4/5] Importing custom segment profiles ..." -ForegroundColor Cyan
@@ -908,6 +942,32 @@ foreach ($segment in $selectedSegments) {
     $oldId   = $s.id   # preserve the original id for binding map lookup after rename
 
     $s = Resolve-Name -Obj $s -Type 'Segment' -Map $nameMap
+
+    # -Disconnected: drop the gateway connection, keep the subnets. Remember
+    # the gateway to connect at the cutover (source gateway after the CSV T1
+    # remap, so a renamed Tier-1 shows its target name) for the summary list.
+    if ($Disconnected) {
+        $srcGw = ''
+        if ($s.PSObject.Properties['connectivity_path'] -and $s.connectivity_path) {
+            $srcGw = "$($s.connectivity_path)"
+            if ($srcGw -match '/tier-1s/([^/]+)' -and $nameMap['T1Gateway'].ContainsKey($Matches[1])) {
+                $srcGw = $srcGw -replace [regex]::Escape($Matches[1]), $nameMap['T1Gateway'][$Matches[1]]
+            }
+            $s.PSObject.Properties.Remove('connectivity_path')
+            Write-Host "      [DISCONNECTED] '$($s.display_name)' (connect at cutover: $srcGw)"
+        }
+        $subnetStr = ''
+        if ($s.PSObject.Properties['subnets'] -and $s.subnets) {
+            $subnetStr = (@($s.subnets) | ForEach-Object {
+                if ($_.PSObject.Properties['gateway_address']) { $_.gateway_address }
+            }) -join ', '
+        }
+        $disconnectedList.Add([PSCustomObject]@{
+            Segment = $s.display_name
+            ConnectAtCutover = if ($srcGw) { $srcGw } else { '(none)' }
+            Subnets = if ($subnetStr) { $subnetStr } else { '(none)' }
+        })
+    }
 
     # Remap T1 gateway reference if the CSV maps this gateway to a different id
     # on the target NSX (T0 gateways use a different path prefix - not remapped here)
@@ -1017,6 +1077,12 @@ Write-Host @"
 |  Segments  OK / Failed : $("$okSegments / $errSegments".PadRight(24))|
 +==================================================+
 "@ -ForegroundColor $statusColor
+
+if ($disconnectedList.Count -gt 0) {
+    Write-Host "`nImported without a gateway (-Disconnected). Connect these at the cutover;" -ForegroundColor Cyan
+    Write-Host "ConnectAtCutover is the source gateway, with Tier-1 names after the CSV remap:" -ForegroundColor Cyan
+    $disconnectedList | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+}
 
 if ($errList.Count -gt 0) {
     Write-Host "`nErrors:" -ForegroundColor Red

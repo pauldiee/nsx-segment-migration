@@ -157,6 +157,7 @@ $cred = Import-Clixml "$env:USERPROFILE\.nsx_cred_nsx_source_corp_local.xml"
 | `-InputPath` | Yes | — | Path to the `.json` file from Export |
 | `-MappingPath` | No | Same path as InputPath with `.csv` extension | Explicit path to the CSV name-mapping file |
 | `-TransportZoneId` | No | Interactive menu | Transport zone id to apply to all imported segments |
+| `-Disconnected` | No | — | Import the selected segments without a gateway connection (`connectivity_path` removed, subnets kept); skips the overlay prompts |
 | `-SkipCertCheck` | No | — | Bypass TLS certificate validation |
 | `-WhatIf` | No | — | Preview all changes without making any API calls |
 
@@ -179,7 +180,18 @@ When the selected transport zone is `OVERLAY_BACKED`, the script checks each seg
 - `connectivity_path` — T0 or T1 gateway connection
 - `subnets` — gateway IP and prefix (e.g. `192.168.10.1/24`)
 
-Missing values trigger an interactive prompt before any import begins. VLAN-backed segments skip this step entirely.
+Missing values trigger an interactive prompt before any import begins. VLAN-backed segments skip this step entirely. With `-Disconnected` the check is skipped.
+
+### Disconnected import
+
+`-Disconnected` imports every selected segment with **Connectivity None**: the script removes `connectivity_path` before the PATCH and keeps the subnets. Use it for overlay subnets that keep their IP addresses in a side-by-side migration without HCX: the old Tier-1 keeps the gateway until the cutover, so the target segment must not advertise the same subnet yet. NSX allows this (*"If a segment is not connected to a gateway, subnet is optional"*) and lets you change the connectivity from None to a Tier-0 or Tier-1 later ([Create an NSX Segment](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/advanced-network-management/administration-guide/segments/add-an-nsx-segment.html)).
+
+The summary ends with a table per segment: `ConnectAtCutover` (the source gateway, with a Tier-1 renamed per the CSV) and the subnets. Select the segments in the menu, so you can import some connected and some disconnected in two runs.
+
+```powershell
+.\Import-NSXSegments.ps1 -NSXManager nsx-target.corp.local `
+    -InputPath ./nsx-export_<timestamp>.json -Disconnected -WhatIf
+```
 
 ### Examples
 
@@ -269,6 +281,9 @@ Once your CA is trusted, `-SkipCertCheck` is no longer needed.
 ---
 
 ## Changelog
+
+### v2.3 — Import
+- Added `-Disconnected`: imports the selected segments without a gateway connection (`connectivity_path` removed, subnets kept), skips the overlay prompts and ends with a `ConnectAtCutover` table. Replaces editing the export JSON by hand (#1).
 
 ### v2.1 — Export / v2.2 — Import / v1.2 — Remove
 - Added built-in credential save and reset. On first run credentials are prompted and optionally saved per NSX Manager using Windows DPAPI encryption. Subsequent runs offer to reuse, overwrite, or ignore the saved credential.
