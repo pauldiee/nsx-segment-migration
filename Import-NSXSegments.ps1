@@ -135,7 +135,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 2.3
+    Version : 2.4
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -144,6 +144,11 @@
 
     Changelog
     ---------
+    2.4 - Prompts without console input stop with a clear message instead
+          of failing on .Trim() of $null. Credentials are saved in
+          creds\<manager>.cred next to the script; the old file in the user
+          profile is still read. -WhatIf lists the binding maps it would
+          write and ends with a dry-run summary (#3).
     2.3 - Added -Disconnected: imports the selected segments without a
           gateway connection (connectivity_path removed, subnets kept),
           skips the overlay gateway/subnet prompts, and ends with a list of
@@ -381,7 +386,7 @@ function Select-Segments {
 
     $selected = $null
     while (-not $selected) {
-        $raw = (Read-Host "  Select").Trim()
+        $raw = Read-Answer "  Select"
 
         if ($raw -eq '*') { $selected = $sorted; break }
 
@@ -462,7 +467,7 @@ function Select-TransportZone {
     Write-Host ""
 
     while ($true) {
-        $raw = (Read-Host "  Select (or Enter to keep existing)").Trim()
+        $raw = Read-Answer "  Select (or Enter to keep existing)"
 
         if (-not $raw) {
             Write-Host "  Keeping transport zone from export" -ForegroundColor Gray
@@ -558,7 +563,7 @@ function Confirm-OverlaySegmentConfig {
                 Write-Host ""
 
                 while ($true) {
-                    $raw = (Read-Host "  Gateway for '$segName'").Trim()
+                    $raw = Read-Answer "  Gateway for '$segName'"
                     if (-not $raw) {
                         Write-Host "  Leaving segment disconnected" -ForegroundColor Gray
                         break
@@ -593,7 +598,7 @@ function Confirm-OverlaySegmentConfig {
             Write-Host ""
 
             while ($true) {
-                $raw = (Read-Host "  Subnet for '$segName'").Trim()
+                $raw = Read-Answer "  Subnet for '$segName'"
                 if (-not $raw) {
                     Write-Host "  Skipping subnet" -ForegroundColor Gray
                     break
@@ -616,37 +621,75 @@ function Confirm-OverlaySegmentConfig {
     return @($updated)
 }
 
-function Get-SavedCredential {
-    # Loads a saved credential from disk if one exists for the given NSX Manager.
-    # Credentials are stored per-manager so switching between environments works
-    # without them overwriting each other.
-    # Returns the PSCredential, or $null if no saved credential exists.
+function Read-Answer {
+    # Read-Host returns $null when there is no console input (redirected or
+    # closed stdin, a scheduled task). Stop with a clear message instead of
+    # failing on .Trim() of $null (#3).
+    param([string]$Prompt)
+    $answer = Read-Host $Prompt
+    if ($null -eq $answer) {
+        throw "No console input for the prompt '$($Prompt.Trim())'. Run the script in an interactive PowerShell window (pass -Credential to skip the credential prompts)."
+    }
+    return $answer.Trim()
+}
+
+function Get-CredentialPath {
+    # creds\<manager>.cred next to the script, like the other tools (#3).
     param([string]$Manager)
-    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
-    if (Test-Path $path) {
-        try { return Import-Clixml -Path $path }
-        catch { return $null }
+    $safe = $Manager -replace '[^a-zA-Z0-9.\-]', '_'
+    return Join-Path (Join-Path $PSScriptRoot 'creds') "$safe.cred"
+}
+
+function Get-LegacyCredentialPath {
+    # Where versions before #3 saved the credential: the user profile.
+    param([string]$Manager)
+    $home_ = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    return Join-Path $home_ ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+}
+
+function Get-SavedCredential {
+    # Loads a saved credential for the given NSX Manager: creds\<manager>.cred
+    # next to the script, or the old file in the user profile if only that
+    # one exists. Returns the PSCredential, or $null if there is none.
+    param([string]$Manager)
+    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
+        if (Test-Path $path) {
+            try {
+                $cred = Import-Clixml -Path $path
+                if ($path -eq (Get-LegacyCredentialPath -Manager $Manager)) {
+                    Write-Host "      Using the old credential file $path; choose [2] to save it in creds\ next to the script." -ForegroundColor Gray
+                }
+                return $cred
+            } catch { }
+        }
     }
     return $null
 }
 
 function Save-Credential {
-    # Saves a credential to disk encrypted with Windows DPAPI.
-    # The file is named after the NSX Manager so each manager has its own file.
-    # Only the current Windows user account on this machine can decrypt it.
+    # Saves a credential to creds\<manager>.cred next to the script. On
+    # Windows Export-Clixml encrypts the password with DPAPI (only this user
+    # on this machine can read it); on Linux and macOS it is NOT encrypted.
     param([System.Management.Automation.PSCredential]$Cred, [string]$Manager)
-    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    $path = Get-CredentialPath -Manager $Manager
+    $dir  = Split-Path $path -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $Cred | Export-Clixml -Path $path
     Write-Host "      Credential saved to: $path" -ForegroundColor Gray
+    $onWindows = if (Test-Path Variable:IsWindows) { $IsWindows } else { $true }
+    if (-not $onWindows) {
+        Write-Host "      Note: on this OS the password in that file is not encrypted." -ForegroundColor Yellow
+    }
 }
 
 function Remove-SavedCredential {
-    # Deletes the saved credential file for the given NSX Manager.
+    # Deletes the saved credential file(s) for the given NSX Manager.
     param([string]$Manager)
-    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
-    if (Test-Path $path) {
-        Remove-Item -Path $path -Force
-        Write-Host "      Saved credential removed." -ForegroundColor Gray
+    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
+        if (Test-Path $path) {
+            Remove-Item -Path $path -Force
+            Write-Host "      Saved credential removed: $path" -ForegroundColor Gray
+        }
     }
 }
 
@@ -672,7 +715,7 @@ function Resolve-Credential {
         Write-Host ""
 
         while ($true) {
-            $choice = (Read-Host "  Select").Trim()
+            $choice = Read-Answer "  Select"
             switch ($choice) {
                 '1' {
                     Write-Host "  Using saved credential." -ForegroundColor Green
@@ -695,7 +738,7 @@ function Resolve-Credential {
     # No saved credential - prompt and offer to save
     $cred = Read-NSXCredential
     Write-Host ""
-    $save = (Read-Host "  Save credential for future runs? (Y/N)").Trim()
+    $save = Read-Answer "  Save credential for future runs? (Y/N)"
     if ($save -eq 'Y' -or $save -eq 'y') {
         Save-Credential -Cred $cred -Manager $Manager
     }
@@ -707,8 +750,9 @@ function Read-NSXCredential {
     # Prompts for username and password using Read-Host.
     # Read-Host is used instead of Get-Credential because Get-Credential
     # can return null in some PowerShell hosts and execution contexts.
-    $user = Read-Host "  NSX username"
+    $user = Read-Answer "  NSX username"
     $pass = Read-Host "  NSX password" -AsSecureString
+    if ($null -eq $pass) { throw "No console input for the NSX password. Run the script interactively or pass -Credential." }
     return [System.Management.Automation.PSCredential]::new($user, $pass)
 }
 
@@ -718,10 +762,10 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "2.3"
+    Version = "2.4"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
-    Date    = "2026-03-22"
+    Date    = "2026-11-16"
 }
 
 # =============================================================================
@@ -872,8 +916,9 @@ $disconnectedList = [System.Collections.Generic.List[object]]::new()
 # -- 4. Import segment profiles -----------------------------------------------
 Write-Host "`n[4/5] Importing custom segment profiles ..." -ForegroundColor Cyan
 
-$okProfiles  = 0
-$errProfiles = 0
+$okProfiles    = 0
+$errProfiles   = 0
+$wouldProfiles = 0
 $errList     = @()
 
 foreach ($profile in $profilesToImport) {
@@ -925,14 +970,17 @@ foreach ($profile in $profilesToImport) {
         }
     } else {
         Write-Host "      [WhatIf] Would PATCH profile '$($p.display_name)'"
+        $wouldProfiles++
     }
 }
 
 # -- 5. Import segments and profile binding maps ------------------------------
 Write-Host "`n[5/5] Importing segments ..." -ForegroundColor Cyan
 
-$okSegments  = 0
-$errSegments = 0
+$okSegments    = 0
+$errSegments   = 0
+$wouldSegments = 0
+$wouldBindings = 0
 
 foreach ($segment in $selectedSegments) {
 
@@ -1003,71 +1051,85 @@ foreach ($segment in $selectedSegments) {
             $errSegments++
             continue   # skip binding maps - no point applying them if the segment failed
         }
-
-        # Apply profile binding maps for this segment.
-        # The export keys binding maps by the original segment id (before any rename)
-        # so we look up by $oldId first, then fall back to $segId (the post-rename id)
-        # for exports produced before renaming was introduced.
-        $entryKey = if ($exportBindingMaps.ContainsKey($oldId))   { $oldId  }
-                    elseif ($exportBindingMaps.ContainsKey($segId)) { $segId  }
-                    else                                             { $null  }
-
-        if ($entryKey) {
-            $entries = @($exportBindingMaps[$entryKey])
-            Write-Host "      Applying $($entries.Count) profile binding(s)"
-
-            foreach ($entry in $entries) {
-                # Each entry carries the binding map type (which child API path to use)
-                # and the raw binding map data object from the export.
-                $bmType = if ($entry.PSObject.Properties['bmtype']) { $entry.bmtype } else { 'segment-discovery-profile-binding-maps' }
-                $bm     = if ($entry.PSObject.Properties['data'])   { $entry.data   } else { $entry }
-
-                $b       = $bm | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-                $bmOldId = if ($b.PSObject.Properties['id']) { $b.id } else { 'default' }
-
-                # Translate every *_profile_path property through the remap table.
-                # This updates qos_profile_path, ip_discovery_profile_path, etc.
-                # to point at the correctly named profile on the target NSX.
-                foreach ($prop in @($b.PSObject.Properties)) {
-                    if ($prop.Name -match '_profile_path$' -and
-                        $prop.Value -is [string] -and
-                        $profilePathRemap.ContainsKey($prop.Value)) {
-                        $newVal = $profilePathRemap[$prop.Value]
-                        Write-Host "        [REMAP] $($prop.Name): $($prop.Value) -> $newVal"
-                        $b.$($prop.Name) = $newVal
-                    }
-                }
-
-                $b         = Remove-ReadOnlyFields -Obj $b
-                $bmId      = if ($b.PSObject.Properties['id']) { $b.id } else { 'default' }
-                $bmApiPath = "/policy/api/v1/infra/segments/$segId/$bmType/$bmId"
-                $bmBody    = $b | ConvertTo-Json -Depth 20
-
-                if ($PSCmdlet.ShouldProcess($NSXManager, "PATCH $bmType on '$($s.display_name)'")) {
-                    try {
-                        $null = Invoke-NSXApi -Path $bmApiPath -Method PATCH -Body $bmBody
-                        Write-Host "        [OK] $bmType/$bmId" -ForegroundColor Green
-                    } catch {
-                        Write-Warning "        [FAIL] $bmType/$bmId : $_"
-                        $errList += "$bmType '$bmOldId' on segment '$oldName': $_"
-                    }
-                } else {
-                    Write-Host "        [WhatIf] Would PATCH $bmApiPath"
-                }
-            }
-        } else {
-            Write-Host "      No profile bindings in export for '$oldName'"
-        }
-
     } else {
         Write-Host "      [WhatIf] Would PATCH segment '$($s.display_name)' at $apiPath"
+        $wouldSegments++
+    }
+
+    # Apply profile binding maps for this segment (in a dry run: list them).
+    # The export keys binding maps by the original segment id (before any rename)
+    # so we look up by $oldId first, then fall back to $segId (the post-rename id)
+    # for exports produced before renaming was introduced.
+    $entryKey = if ($exportBindingMaps.ContainsKey($oldId))   { $oldId  }
+                elseif ($exportBindingMaps.ContainsKey($segId)) { $segId  }
+                else                                             { $null  }
+
+    if ($entryKey) {
+        $entries = @($exportBindingMaps[$entryKey])
+        Write-Host "      Applying $($entries.Count) profile binding(s)"
+
+        foreach ($entry in $entries) {
+            # Each entry carries the binding map type (which child API path to use)
+            # and the raw binding map data object from the export.
+            $bmType = if ($entry.PSObject.Properties['bmtype']) { $entry.bmtype } else { 'segment-discovery-profile-binding-maps' }
+            $bm     = if ($entry.PSObject.Properties['data'])   { $entry.data   } else { $entry }
+
+            $b       = $bm | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+            $bmOldId = if ($b.PSObject.Properties['id']) { $b.id } else { 'default' }
+
+            # Translate every *_profile_path property through the remap table.
+            # This updates qos_profile_path, ip_discovery_profile_path, etc.
+            # to point at the correctly named profile on the target NSX.
+            foreach ($prop in @($b.PSObject.Properties)) {
+                if ($prop.Name -match '_profile_path$' -and
+                    $prop.Value -is [string] -and
+                    $profilePathRemap.ContainsKey($prop.Value)) {
+                    $newVal = $profilePathRemap[$prop.Value]
+                    Write-Host "        [REMAP] $($prop.Name): $($prop.Value) -> $newVal"
+                    $b.$($prop.Name) = $newVal
+                }
+            }
+
+            $b         = Remove-ReadOnlyFields -Obj $b
+            $bmId      = if ($b.PSObject.Properties['id']) { $b.id } else { 'default' }
+            $bmApiPath = "/policy/api/v1/infra/segments/$segId/$bmType/$bmId"
+            $bmBody    = $b | ConvertTo-Json -Depth 20
+
+            if ($PSCmdlet.ShouldProcess($NSXManager, "PATCH $bmType on '$($s.display_name)'")) {
+                try {
+                    $null = Invoke-NSXApi -Path $bmApiPath -Method PATCH -Body $bmBody
+                    Write-Host "        [OK] $bmType/$bmId" -ForegroundColor Green
+                } catch {
+                    Write-Warning "        [FAIL] $bmType/$bmId : $_"
+                    $errList += "$bmType '$bmOldId' on segment '$oldName': $_"
+                }
+            } else {
+                Write-Host "        [WhatIf] Would PATCH $bmApiPath"
+                $wouldBindings++
+            }
+        }
+    } else {
+        Write-Host "      No profile bindings in export for '$oldName'"
     }
 }
 
 # -- Summary ------------------------------------------------------------------
 $totalErrors = $errProfiles + $errSegments
 $statusColor = if ($totalErrors -eq 0) { 'Green' } else { 'Yellow' }
+$dryRun      = [bool]$WhatIfPreference
 
+if ($dryRun) {
+    Write-Host @"
+
++==================================================+
+|   DRY RUN (-WhatIf): nothing was changed         |
++==================================================+
+|  Profiles that would be written : $("$wouldProfiles".PadRight(15))|
+|  Segments that would be written : $("$wouldSegments".PadRight(15))|
+|  Bindings that would be written : $("$wouldBindings".PadRight(15))|
++==================================================+
+"@ -ForegroundColor Cyan
+} else {
 Write-Host @"
 
 +==================================================+
@@ -1077,9 +1139,11 @@ Write-Host @"
 |  Segments  OK / Failed : $("$okSegments / $errSegments".PadRight(24))|
 +==================================================+
 "@ -ForegroundColor $statusColor
+}
 
 if ($disconnectedList.Count -gt 0) {
-    Write-Host "`nImported without a gateway (-Disconnected). Connect these at the cutover;" -ForegroundColor Cyan
+    $verb = if ($dryRun) { 'Would be imported' } else { 'Imported' }
+    Write-Host "`n$verb without a gateway (-Disconnected). Connect these at the cutover;" -ForegroundColor Cyan
     Write-Host "ConnectAtCutover is the source gateway, with Tier-1 names after the CSV remap:" -ForegroundColor Cyan
     $disconnectedList | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 }
@@ -1087,6 +1151,8 @@ if ($disconnectedList.Count -gt 0) {
 if ($errList.Count -gt 0) {
     Write-Host "`nErrors:" -ForegroundColor Red
     $errList | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+} elseif ($dryRun) {
+    Write-Host "Dry run complete. Run again without -WhatIf to import.`n" -ForegroundColor Cyan
 } else {
     Write-Host "All items imported successfully!`n" -ForegroundColor Green
 }

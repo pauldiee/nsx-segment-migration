@@ -72,7 +72,7 @@
     <OutputBase>.csv   - Name-mapping table; edit NewName column before importing
 
 .NOTES
-    Version : 2.1
+    Version : 2.2
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -81,6 +81,10 @@
 
     Changelog
     ---------
+    2.2 - Prompts without console input stop with a clear message instead
+          of failing on .Trim() of $null. Credentials are saved in
+          creds\<manager>.cred next to the script; the old file in the user
+          profile is still read (#3).
     2.1 - Added built-in credential save/reset via Resolve-Credential.
           Replaced Get-Credential with Read-Host to fix null credential errors
           in non-interactive PowerShell hosts under Set-StrictMode.
@@ -227,7 +231,7 @@ function Select-Segments {
 
     $selected = $null
     while (-not $selected) {
-        $raw = (Read-Host "  Select").Trim()
+        $raw = Read-Answer "  Select"
 
         if ($raw -eq '*') { $selected = $sorted; break }
 
@@ -270,28 +274,76 @@ function Select-Segments {
     return @($selected)
 }
 
-function Get-SavedCredential {
-    # Loads a saved credential from disk if one exists for the given NSX Manager.
-    # Credentials are stored per-manager so switching between environments works
-    # without them overwriting each other.
-    # Returns the PSCredential, or $null if no saved credential exists.
+function Read-Answer {
+    # Read-Host returns $null when there is no console input (redirected or
+    # closed stdin, a scheduled task). Stop with a clear message instead of
+    # failing on .Trim() of $null (#3).
+    param([string]$Prompt)
+    $answer = Read-Host $Prompt
+    if ($null -eq $answer) {
+        throw "No console input for the prompt '$($Prompt.Trim())'. Run the script in an interactive PowerShell window (pass -Credential to skip the credential prompts)."
+    }
+    return $answer.Trim()
+}
+
+function Get-CredentialPath {
+    # creds\<manager>.cred next to the script, like the other tools (#3).
     param([string]$Manager)
-    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
-    if (Test-Path $path) {
-        try { return Import-Clixml -Path $path }
-        catch { return $null }
+    $safe = $Manager -replace '[^a-zA-Z0-9.\-]', '_'
+    return Join-Path (Join-Path $PSScriptRoot 'creds') "$safe.cred"
+}
+
+function Get-LegacyCredentialPath {
+    # Where versions before #3 saved the credential: the user profile.
+    param([string]$Manager)
+    $home_ = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    return Join-Path $home_ ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+}
+
+function Get-SavedCredential {
+    # Loads a saved credential for the given NSX Manager: creds\<manager>.cred
+    # next to the script, or the old file in the user profile if only that
+    # one exists. Returns the PSCredential, or $null if there is none.
+    param([string]$Manager)
+    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
+        if (Test-Path $path) {
+            try {
+                $cred = Import-Clixml -Path $path
+                if ($path -eq (Get-LegacyCredentialPath -Manager $Manager)) {
+                    Write-Host "      Using the old credential file $path; choose [2] to save it in creds\ next to the script." -ForegroundColor Gray
+                }
+                return $cred
+            } catch { }
+        }
     }
     return $null
 }
 
 function Save-Credential {
-    # Saves a credential to disk encrypted with Windows DPAPI.
-    # The file is named after the NSX Manager so each manager has its own file.
-    # Only the current Windows user account on this machine can decrypt it.
+    # Saves a credential to creds\<manager>.cred next to the script. On
+    # Windows Export-Clixml encrypts the password with DPAPI (only this user
+    # on this machine can read it); on Linux and macOS it is NOT encrypted.
     param([System.Management.Automation.PSCredential]$Cred, [string]$Manager)
-    $path = Join-Path $env:USERPROFILE ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
+    $path = Get-CredentialPath -Manager $Manager
+    $dir  = Split-Path $path -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $Cred | Export-Clixml -Path $path
     Write-Host "      Credential saved to: $path" -ForegroundColor Gray
+    $onWindows = if (Test-Path Variable:IsWindows) { $IsWindows } else { $true }
+    if (-not $onWindows) {
+        Write-Host "      Note: on this OS the password in that file is not encrypted." -ForegroundColor Yellow
+    }
+}
+
+function Remove-SavedCredential {
+    # Deletes the saved credential file(s) for the given NSX Manager.
+    param([string]$Manager)
+    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
+        if (Test-Path $path) {
+            Remove-Item -Path $path -Force
+            Write-Host "      Saved credential removed: $path" -ForegroundColor Gray
+        }
+    }
 }
 
 function Resolve-Credential {
@@ -314,7 +366,7 @@ function Resolve-Credential {
         Write-Host ""
 
         while ($true) {
-            $choice = (Read-Host "  Select").Trim()
+            $choice = Read-Answer "  Select"
             switch ($choice) {
                 '1' { Write-Host "  Using saved credential." -ForegroundColor Green
                       Write-Host ""; return $saved }
@@ -330,7 +382,7 @@ function Resolve-Credential {
     # No saved credential - prompt then offer to save
     $cred = Read-NSXCredential
     Write-Host ""
-    $save = (Read-Host "  Save credential for future runs? (Y/N)").Trim()
+    $save = Read-Answer "  Save credential for future runs? (Y/N)"
     if ($save -eq 'Y' -or $save -eq 'y') {
         Save-Credential -Cred $cred -Manager $Manager
     }
@@ -343,8 +395,9 @@ function Read-NSXCredential {
     # Read-Host is used instead of Get-Credential because Get-Credential can
     # return null in some PowerShell hosts under Set-StrictMode, which causes
     # a PropertyNotFoundException on the first property access.
-    $user = Read-Host "  NSX username"
+    $user = Read-Answer "  NSX username"
     $pass = Read-Host "  NSX password" -AsSecureString
+    if ($null -eq $pass) { throw "No console input for the NSX password. Run the script interactively or pass -Credential." }
     return [System.Management.Automation.PSCredential]::new($user, $pass)
 }
 
@@ -354,10 +407,10 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Export-NSXSegments.ps1"
-    Version = "2.1"
+    Version = "2.2"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
-    Date    = "2026-03-22"
+    Date    = "2026-11-16"
 }
 
 # =============================================================================
