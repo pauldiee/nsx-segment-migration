@@ -16,6 +16,7 @@ By Paul van Dieen
 | `Export-NSXSegments.ps1` | Exports segments, custom profiles, and profile binding maps from a source NSX to a JSON + CSV file pair |
 | `Import-NSXSegments.ps1` | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
 | `Remove-NSXSegments.ps1` | Interactively selects and deletes segments and/or profiles, with a typed confirmation gate |
+| `tests/New-NSXSMTestSet.ps1` | Builds, shows and removes a throwaway `NSXSM-T-*` test set in a **lab** NSX Manager |
 
 ---
 
@@ -86,7 +87,7 @@ All three scripts handle credentials the same way:
   NSX username: admin
   NSX password: ********
   Save credential for future runs? (Y/N): Y
-  Credential saved to: C:\Users\paul\.nsx_cred_nsx_source_corp_local.xml
+  Credential saved to: C:\Scripts\nsx-segment-migration\creds\nsx-source.corp.local.cred
 ```
 
 **Subsequent runs (saved credential found):**
@@ -99,14 +100,18 @@ All three scripts handle credentials the same way:
   Select: 1
 ```
 
-Credentials are saved per NSX Manager, so source and target environments each have their own file. The files are encrypted with Windows DPAPI and can only be decrypted by your Windows user account on the same machine.
+Credentials are saved per NSX Manager in `creds\<manager>.cred` next to the scripts, so source and target environments each have their own file (`creds/` is in `.gitignore`). On Windows the password is encrypted with DPAPI and can only be decrypted by your Windows user account on the same machine; on Linux and macOS `Export-Clixml` does **not** encrypt it, and the scripts say so when they save.
+
+Before v2.2 / v2.4 / v1.3 the file was `%USERPROFILE%\.nsx_cred_<manager>.xml`. The scripts still read that file if there is no `creds\` file yet; choose **[2]** once to save it in the new place.
 
 To bypass the interactive flow entirely, pass a credential object directly:
 
 ```powershell
-$cred = Import-Clixml "$env:USERPROFILE\.nsx_cred_nsx_source_corp_local.xml"
+$cred = Import-Clixml .\creds\nsx-source.corp.local.cred
 .\Export-NSXSegments.ps1 -NSXManager nsx-source.corp.local -Credential $cred -SkipCertCheck
 ```
+
+The scripts need an interactive console for their menus. Without one (input redirected, a scheduled task) a prompt stops the script with *"No console input for the prompt ..."* instead of an unclear error.
 
 ---
 
@@ -280,7 +285,23 @@ Once your CA is trusted, `-SkipCertCheck` is no longer needed.
 
 ---
 
+## Testing in a lab
+
+`tests/New-NSXSMTestSet.ps1` builds a test set in a **lab** NSX Manager (`-Mode Create`): one custom profile of each type the export carries (QoS, SpoofGuard, IP Discovery, MAC Discovery, Segment Security), a Tier-1 without an Edge cluster, and four segments: two overlay segments with a gateway and subnet (one with all five profiles bound), an overlay segment without a gateway and a VLAN segment. `-Mode Show` lists each segment's transport zone, gateway, subnets, VLAN and bound profiles; `-Mode Remove` deletes the set. It only touches `NSXSM-T-*` objects and reads the same credential file as the scripts.
+
+Suggested run: Create, Export the `NSXSM-T-Ovl-GW*` segments, give them a new name in the CSV (`NSXSM-T-Imp-GW1`, ...) so the import doesn't overwrite them, Import with `-WhatIf`, Import with `-Disconnected`, compare with Show.
+
+Lab result (NSX 4.2.4.1, 2026-11-16): the `-Disconnected` import gave both copies Connectivity None with their subnets and all profile bindings, and the cutover table named `NSXSM-T-T1`.
+
+---
+
 ## Changelog
+
+### v2.2 — Export / v2.4 — Import / v1.3 — Remove
+- Prompts without console input stop with *"No console input for the prompt ..."* instead of failing on `.Trim()` of `$null` (#3).
+- Credentials are saved in `creds\<manager>.cred` next to the scripts; the old `%USERPROFILE%\.nsx_cred_<manager>.xml` is still read (#3).
+- Import: `-WhatIf` lists the binding maps it would write and ends with a dry-run summary (what would be written, nothing changed) instead of *"All items imported successfully!"* (#3).
+- New `tests/New-NSXSMTestSet.ps1` (#3).
 
 ### v2.3 — Import
 - Added `-Disconnected`: imports the selected segments without a gateway connection (`connectivity_path` removed, subnets kept), skips the overlay prompts and ends with a `ConnectAtCutover` table. Replaces editing the export JSON by hand (#1).
