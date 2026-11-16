@@ -46,7 +46,8 @@
 
     Overlay segment validation
     --------------------------
-    If the selected transport zone is OVERLAY_BACKED, the script checks each
+    If the selected transport zone is an overlay zone (OVERLAY_BACKED,
+    OVERLAY_STANDARD or OVERLAY_ENS), the script checks each
     segment for the two fields NSX requires:
       - connectivity_path  (T0 or T1 gateway connection)
       - subnets            (gateway IP and prefix, e.g. 192.168.10.1/24)
@@ -135,7 +136,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 2.4
+    Version : 2.5
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -144,6 +145,9 @@
 
     Changelog
     ---------
+    2.5 - Overlay validation runs for every overlay transport zone type
+          (OVERLAY_BACKED, OVERLAY_STANDARD, OVERLAY_ENS); it was skipped
+          for OVERLAY_STANDARD, the type of NSX 4's default overlay zone (#5).
     2.4 - Prompts without console input stop with a clear message instead
           of failing on .Trim() of $null. Credentials are saved in
           creds\<manager>.cred next to the script; the old file in the user
@@ -762,7 +766,7 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "2.4"
+    Version = "2.5"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-16"
@@ -907,7 +911,7 @@ Write-Host "      Transport zone type: $($script:SelectedTzType)"
 if ($Disconnected) {
     Write-Host "`n      -Disconnected: segments are imported without a gateway connection;" -ForegroundColor Cyan
     Write-Host "      overlay gateway/subnet check skipped (subnets from the export are kept)." -ForegroundColor Cyan
-} elseif ($script:SelectedTzType -eq 'OVERLAY_BACKED') {
+} elseif ($script:SelectedTzType -like 'OVERLAY*') {   # OVERLAY_BACKED / _STANDARD / _ENS (#5)
     Write-Host "`n      Checking overlay segment requirements ..." -ForegroundColor Cyan
     $selectedSegments = @(Confirm-OverlaySegmentConfig -Segments $selectedSegments)
 }

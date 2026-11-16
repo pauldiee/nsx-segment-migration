@@ -180,7 +180,7 @@ After connecting, an interactive menu lists all transport zones on the target NS
 
 ### Overlay segment validation
 
-When the selected transport zone is `OVERLAY_BACKED`, the script checks each segment for the two fields NSX requires:
+When the selected transport zone is an overlay zone (`OVERLAY_BACKED`, `OVERLAY_STANDARD` or `OVERLAY_ENS`), the script checks each segment for the two fields NSX requires:
 
 - `connectivity_path` — T0 or T1 gateway connection
 - `subnets` — gateway IP and prefix (e.g. `192.168.10.1/24`)
@@ -291,11 +291,17 @@ Once your CA is trusted, `-SkipCertCheck` is no longer needed.
 
 Suggested run: Create, Export the `NSXSM-T-Ovl-GW*` segments, give them a new name in the CSV (`NSXSM-T-Imp-GW1`, ...) so the import doesn't overwrite them, Import with `-WhatIf`, Import with `-Disconnected`, compare with Show.
 
-Lab result (NSX 4.2.4.1, 2026-11-16): the `-Disconnected` import gave both copies Connectivity None with their subnets and all profile bindings, and the cutover table named `NSXSM-T-T1`.
+Lab results (2026-11-16):
+
+- NSX 4.2.4.1 to itself: the `-Disconnected` import gave both copies Connectivity None with their subnets and all profile bindings, and the cutover table named `NSXSM-T-T1`. `Remove-NSXSegments.ps1` removed the copies (bindings first) after the port check and the typed `YES`.
+- NSX 4.2.4.1 to NSX 9.1.1: the whole set imported (overlay segments with a gateway via `-Disconnected`, the one without a gateway and the VLAN segment in separate runs, one transport zone per run); the profiles landed on NSX 9's flat `/infra/<type>/` paths with all bindings. Removed again with `Remove-NSXSegments.ps1`.
 
 ---
 
 ## Changelog
+
+### v2.5 — Import
+- Overlay validation runs for every overlay transport zone type; it was skipped for `OVERLAY_STANDARD`, the type of NSX 4's default `nsx-overlay-transportzone` (#5).
 
 ### v2.2 — Export / v2.4 — Import / v1.3 — Remove
 - Prompts without console input stop with *"No console input for the prompt ..."* instead of failing on `.Trim()` of `$null` (#3).
