@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+
 <#
 .SYNOPSIS
     Interactively selects and deletes NSX segments and/or custom segment
@@ -80,7 +81,7 @@
     .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck -WhatIf
 
 .NOTES
-    Version : 1.3
+    Version : 1.4
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Toolkit : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -89,6 +90,9 @@
 
     Changelog
     ---------
+    1.4 - Get-Help shows the full help again: blank line between
+          #Requires and the help block (without it Get-Help ignored
+          the whole help block).
     1.3 - Prompts without console input stop with a clear message instead
           of failing on .Trim() of $null. Credentials are saved in
           creds\<manager>.cred next to the script; the old file in the user
@@ -472,10 +476,10 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Remove-NSXSegments.ps1"
-    Version = "1.3"
+    Version = "1.4"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
-    Date    = "2026-11-16"
+    Date    = "2026-11-18"
 }
 
 # =============================================================================

@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+
 <#
 .SYNOPSIS
     Exports NSX segments, custom segment profiles, and profile binding maps
@@ -72,7 +73,7 @@
     <OutputBase>.csv   - Name-mapping table; edit NewName column before importing
 
 .NOTES
-    Version : 2.2
+    Version : 2.3
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -81,6 +82,9 @@
 
     Changelog
     ---------
+    2.3 - Get-Help shows the full help again: blank line between
+          #Requires and the help block (without it Get-Help ignored
+          the whole help block).
     2.2 - Prompts without console input stop with a clear message instead
           of failing on .Trim() of $null. Credentials are saved in
           creds\<manager>.cred next to the script; the old file in the user
@@ -407,10 +411,10 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Export-NSXSegments.ps1"
-    Version = "2.2"
+    Version = "2.3"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
-    Date    = "2026-11-16"
+    Date    = "2026-11-18"
 }
 
 # =============================================================================

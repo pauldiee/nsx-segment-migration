@@ -1,4 +1,5 @@
 #Requires -Version 7.0
+
 <#
 .SYNOPSIS
     Builds, shows or removes a throwaway test set in a LAB NSX Manager for
@@ -50,16 +51,24 @@
 
 .NOTES
     Script   : New-NSXSMTestSet.ps1
-    Version  : 1.0.0
+    Version  : 1.0.1
     Author   : Paul van Dieen
     Blog     : https://www.hollebollevsan.nl
     Requires : PowerShell 7+, NSX Manager admin (Policy API)
     Tested   : NSX 4.2.4.1 (lab), 2026-11-16
+#>
 
-.CHANGELOG
+<# CHANGELOG
+    v1.0.1  2026-11-18  Paul van Dieen
+        - Get-Help shows the full help again: the changelog moved out of the
+          help block into its own comment block (the unknown .CHANGELOG
+          keyword made Get-Help ignore the whole help block)
+        - Blank line between #Requires and the help block, for the same reason
+
     v1.0.0  2026-11-16  Paul van Dieen
         - Initial release: Create / Show / Remove of the segment test set
 #>
+
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$NSXManager,
@@ -71,7 +80,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$scriptVersion = '1.0.0'
+$scriptVersion = '1.0.1'
 $scriptAuthor  = 'Paul van Dieen'
 $scriptBlogUrl = 'https://www.hollebollevsan.nl'
 $prefix        = 'NSXSM-T-'
