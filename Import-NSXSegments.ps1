@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+
 <#
 .SYNOPSIS
     Imports NSX segments, custom segment profiles, and profile binding maps
@@ -136,7 +137,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 2.5
+    Version : 2.6
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -145,6 +146,9 @@
 
     Changelog
     ---------
+    2.6 - Get-Help shows the full help again: blank line between
+          #Requires and the help block (without it Get-Help ignored
+          the whole help block).
     2.5 - Overlay validation runs for every overlay transport zone type
           (OVERLAY_BACKED, OVERLAY_STANDARD, OVERLAY_ENS); it was skipped
           for OVERLAY_STANDARD, the type of NSX 4's default overlay zone (#5).
@@ -766,10 +770,10 @@ function Read-NSXCredential {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "2.5"
+    Version = "2.6"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
-    Date    = "2026-11-16"
+    Date    = "2026-11-18"
 }
 
 # =============================================================================

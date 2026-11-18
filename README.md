@@ -300,6 +300,9 @@ Lab results (2026-11-16):
 
 ## Changelog
 
+### v2.3 — Export / v2.6 — Import / v1.4 — Remove
+- `Get-Help` shows the full help again: a blank line between `#Requires` and the help block (without it `Get-Help` ignored the whole help block). Same for `tests/New-NSXSMTestSet.ps1` (v1.0.1), whose changelog also moved out of the help block.
+
 ### v2.5 — Import
 - Overlay validation runs for every overlay transport zone type; it was skipped for `OVERLAY_STANDARD`, the type of NSX 4's default `nsx-overlay-transportzone` (#5).
 
