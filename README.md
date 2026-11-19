@@ -17,6 +17,7 @@ By Paul van Dieen
 | `Import-NSXSegments.ps1` | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
 | `Remove-NSXSegments.ps1` | Interactively selects and deletes segments and/or profiles, with a typed confirmation gate |
 | `tests/New-NSXSMTestSet.ps1` | Builds, shows and removes a throwaway `NSXSM-T-*` test set in a **lab** NSX Manager |
+| `tests/New-NSXSMScaleSet.ps1` | Builds and removes a large `NSXSM-S-*` set (default 500 segments) in a **lab** NSX Manager |
 
 ---
 
@@ -295,6 +296,8 @@ Lab results (2026-11-16):
 
 - NSX 4.2.4.1 to itself: the `-Disconnected` import gave both copies Connectivity None with their subnets and all profile bindings, and the cutover table named `NSXSM-T-T1`. `Remove-NSXSegments.ps1` removed the copies (bindings first) after the port check and the typed `YES`.
 - NSX 4.2.4.1 to NSX 9.1.1: the whole set imported (overlay segments with a gateway via `-Disconnected`, the one without a gateway and the VLAN segment in separate runs, one transport zone per run); the profiles landed on NSX 9's flat `/infra/<type>/` paths with all bindings. Removed again with `Remove-NSXSegments.ps1`.
+
+`tests/New-NSXSMScaleSet.ps1` builds a large set for scale tests: the five custom profiles as `NSXSM-S-*`, three Tier-1s without an Edge cluster (`-Tier1Count`) and 500 segments (`-SegmentCount`): 60% overlay with a /24 gateway, 20% overlay without gateway, 20% VLAN, every tenth with all five profiles bound. On NSX 9.1.1 the set takes about 1.5 minutes; `-Mode Remove` deletes it. Test cases and results: `tests/TESTPLAN.md`.
 
 ---
 
