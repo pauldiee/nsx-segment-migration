@@ -48,13 +48,26 @@ matches nothing, bad input and out-of-range numbers, `cancel` (Import stops
 before connecting, Remove deletes nothing), Remove's Enter-to-skip, and
 Import `-SegmentFilter`: **pass**, on PowerShell 7 and (Import picker) 5.1.
 
-Not covered yet: the port warning with a real port on a selected segment
-(NB had no ports on test segments; search and per-segment counts agreed on
-"0"), the retry after a lagging search index, and `-Confirm` answered No.
+**`-Confirm` and ports (2026-11-26, NB, functional set):**
+
+| # | Steps | Result |
+|---|---|---|
+| C1 | Remove `-Confirm` on `Ovl-GW1` (five binding maps) and `Ovl-GW2`, typed `YES`, No for GW1, Yes for GW2 | **pass**: GW2 removed; GW1 kept with all five binding maps (checked with `-Mode Show`). The summary still says "All selected objects deleted successfully" with 1 OK and GW1 not counted |
+| P1 | Powered-on dummy VM (no OS, one vNIC) on `Ovl-NoGW`; Remove `-WhatIf` on `Ovl-GW1`, `Ovl-NoGW`, `VLAN199`, with and without `-NoSearch` | **pass**: both routes warn "'NSXSM-T-Ovl-NoGW' has 1 port(s) still attached", nothing for the others |
+| P2 | Remove (typed `YES`) on `Ovl-NoGW` with the VM attached | **pass**: `[FAIL]` with NSX's message ("cannot be deleted as it has 1 VMs or VIFs attached"), exit 2 |
+
+After the dummy VM was deleted in vCenter, NSX kept its segment port
+(`<vm>.vmx@<uuid>`) for several minutes and refused the segment DELETE;
+the port was removed through the Policy API before the set's `-Mode Remove`.
+
+Not covered yet: the retry after a lagging search index.
 
 ## Open points
 
 - N4 is the home lab and often powered off; the 4.x source cases date from
   2026-11-16. The search API route (Export 2.4, Remove 1.5) has not run
   against NSX 4.x yet: run F1 and F3 again when N4 is up.
-- S2 into a second NSX (NA to NB) when NA is reachable again.
+- S2 into a second NSX (NA to NB): dropped for this release (2026-11-26),
+  NA is not available for some time. S2 ran into NB itself under new names
+  (`NSXSM-C-*`); a cross-manager import of Import 2.7 is therefore not
+  tested. F3 (N4 to NA, 2026-11-16) covered cross-manager with Import 2.6.
