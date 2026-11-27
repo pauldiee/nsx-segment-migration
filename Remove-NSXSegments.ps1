@@ -87,7 +87,7 @@
     .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck -WhatIf
 
 .NOTES
-    Version : 1.6
+    Version : 1.7
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Toolkit : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -99,6 +99,11 @@
 
     Changelog
     ---------
+    1.7 - Closing line from the counts (#13): "n of m selected object(s)
+          deleted; k declined at -Confirm and kept" instead of "All selected
+          objects deleted successfully" when something was declined. A
+          declined segment or profile is reported as [DECLINED] and counted
+          in the summary.
     1.6 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
           calls, pickers, prompts and credentials. The script stops with a
           clear message when NSXSM-Common.ps1 is missing or older than 1.0;
@@ -255,7 +260,7 @@ function Get-BindingMapsForSegment {
 
 $ScriptMeta = @{
     Name    = "Remove-NSXSegments.ps1"
-    Version = "1.6"
+    Version = "1.7"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -462,6 +467,8 @@ $okSegments  = 0
 $errSegments = 0
 $okProfiles  = 0
 $errProfiles = 0
+$declinedSegments = 0
+$declinedProfiles = 0
 $errList     = [System.Collections.Generic.List[string]]::new()
 
 # Binding maps of all selected segments in three search calls (#10); per
@@ -506,7 +513,12 @@ foreach ($seg in $segmentsToDelete) {
     $counter = "[$segNo/$segTotal]"
     Write-Progress -Activity 'Deleting segments' -Status "$segNo of $segTotal" -PercentComplete ([int](100 * $segNo / $segTotal))
 
-    if (-not $PSCmdlet.ShouldProcess($NSXManager, "DELETE segment '$segName' (and its profile binding maps)")) { continue }
+    # -WhatIf has stopped before this point, so No here is a No at -Confirm (#13)
+    if (-not $PSCmdlet.ShouldProcess($NSXManager, "DELETE segment '$segName' (and its profile binding maps)")) {
+        Write-Host "  $counter [DECLINED] Segment '$segName' - kept, with its binding maps" -ForegroundColor Yellow
+        $declinedSegments++
+        continue
+    }
 
     # Remove all profile binding maps attached to this segment
     $bindingMaps = if ($null -ne $bmByParent) {
@@ -579,6 +591,9 @@ foreach ($prof in $profilesToDelete) {
             $errList.Add("Profile '$profName': $_")
             $errProfiles++
         }
+    } else {
+        Write-Host "  [DECLINED] Profile '$profName' - kept" -ForegroundColor Yellow
+        $declinedProfiles++
     }
 }
 
@@ -595,12 +610,22 @@ Write-Host @"
 |  Profiles  OK / Failed : $("$okProfiles / $errProfiles".PadRight(24))|
 +==================================================+
 "@ -ForegroundColor $statusColor
+$declined = $declinedSegments + $declinedProfiles
+if ($declined -gt 0) {
+    Write-Host "  Declined at -Confirm, kept: $declinedSegments segment(s), $declinedProfiles profile(s)" -ForegroundColor Yellow
+}
 
 if ($errList.Count -gt 0) {
     Write-Host "`nErrors:" -ForegroundColor Red
     $errList | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-} else {
+} elseif ($declined -eq 0) {
     Write-Host "All selected objects deleted successfully.`n" -ForegroundColor Green
+} else {
+    # Closing line from the counts (#13)
+    $selected = $segmentsToDelete.Count + $profilesToDelete.Count
+    $deleted  = $okSegments + $okProfiles
+    $color    = if ($deleted -eq 0) { 'Yellow' } else { 'Green' }
+    Write-Host "$deleted of $selected selected object(s) deleted; $declined declined at -Confirm and kept.`n" -ForegroundColor $color
 }
 
 # Exit codes (#10): 0 done, 1 fatal error (thrown), 2 finished with errors
