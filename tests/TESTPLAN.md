@@ -100,6 +100,20 @@ P1/P2 rerun on 2026-11-27 (see the `-Confirm` and ports table). The dummy VM `NS
 
 Still open: F3 into NA (NSX 9.1.1) and the retry after a lagging search index.
 
+**Import 3.0 / Common 1.1 (#17, #18), 2026-11-27:** dry runs (`-WhatIf`) with the N4 export of `NSXSM-T-*` (`source_manager` 192.168.2.66), segment `Ovl-GW1`; menu answers from stdin.
+
+| # | Lab | Steps | Result |
+|---|---|---|---|
+| T1 | N4 to NB | Enter, Enter, `keep` at the transport zone menu | **pass**: menu says "Export is from another NSX Manager: pick one"; the first Enter shows "1 segment(s) from 'nsx-overlay-transportzone': lands in 'nsx-overlay-transportzone' [OVERLAY_STANDARD] on the target" and the menu again, the second Enter only the menu; `keep` (any case) keeps it; summary "Transport zone: kept from the export (KEEP at the menu)". Same on Windows PowerShell 5.1 |
+| T2 | N4 to NB | `4` at the menu | **pass**: "Selected: overlay-vds01-mgmt-01a [OVERLAY_BACKED]"; summary "... chosen at the menu" |
+| T3 | N4 to N4 | Enter at the menu (same manager) | **pass**: as before, "Keeping transport zone from export"; summary "(Enter at the menu)" |
+| T4 | N4 to NB | `-KeepSourceTransportZone` | **pass**: no menu, the landing line in the log, summary "(-KeepSourceTransportZone)" |
+| T5 | NB | `-KeepSourceTransportZone` with `-TransportZoneId` | **pass**: "Use -TransportZoneId or -KeepSourceTransportZone, not both.", exit 1 |
+| T6 | N4 to NB | `-TransportZoneId` of the default overlay zone | **pass**: no menu, summary "nsx-overlay-transportzone [OVERLAY_STANDARD], from -TransportZoneId" |
+| T7 | N4 | Export without `-SkipCertCheck` (self-signed certificate), PowerShell 7 and 5.1; control: a call without credentials to NB | **pass**: before the fix "The property 'Response' cannot be found on this object" (reproduced); now "HTTP N/A: ... trust relationship for the SSL/TLS secure channel. -- the certificate of the NSX Manager is not trusted: pass -SkipCertCheck ...", exit 1; the control still gives "HTTP 403: The credentials were incorrect ..." on both |
+
+Not tested: an export with a custom zone whose id doesn't exist on the target (the landing line then says "no zone with this id on the target"; what NSX does with such a segment is not tried). Not run without `-WhatIf`: the change is in the menu and the summary, the write path is unchanged.
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on
