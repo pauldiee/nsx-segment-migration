@@ -152,6 +152,16 @@ Not tested: an export with a custom zone whose id doesn't exist on the target (t
 
 `Get-Help` shows the synopsis of all four files after the header change.
 
+**Import 3.4.0 (#26), 2026-11-27:** a segment's id on the target is its display name. Two segments made on N4 with an id that differs from the name (`nsxsm-t-idtest-1` / `NSXSM-T Id Test`, `nsxsm-t-idtest-2` / `NSXSM-T/Slash`, VLAN 198/197), exported and imported into NB (`nsx-vlan-transportzone`).
+
+| # | Steps | Result |
+|---|---|---|
+| I1 | First build (spaces kept in the id), real import | **finding**: `NSXSM-T/Slash` OK as `NSXSM-T_Slash`; `NSXSM-T Id Test` refused: *"HTTP 400: Invalid Id 'NSXSM-T Id Test' for 'Segment'. It is either missing or NULL, or contains spaces or slashes or percent signs or backslashes or semicolons or made only of periods."* Fixed: those characters become `_` |
+| I2 | NB has `NSXSM-T Id Test` under id `nsxsm-t-idtest-1` (as if imported earlier under the source id); import | **pass**: listed as "on the target with id 'nsxsm-t-idtest-1', found by its name", `[EXISTS] ... left as is`, "Nothing imported", exit 0 |
+| I3 | Same with `-UpdateExisting` | **pass**: both `[OK]`; NB still has one `NSXSM-T Id Test` (id `nsxsm-t-idtest-1`), no second segment |
+| I4 | Both removed on NB, import again | **pass**: ids `NSXSM-T_Id_Test` and `NSXSM-T_Slash`, names unchanged; `[ID]` line per name in the log; exit 0 |
+| I5 | Clean-up | Test segments removed on NB and N4, the five profiles on NB; N4 back to the base set |
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on
