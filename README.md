@@ -20,14 +20,14 @@ nsx-segment-migration carries NSX segments and segment profiles over in a side-b
 
 ## Scripts
 
-| Script | Purpose |
-|--------|---------|
-| `Export-NSXSegments.ps1` | Exports segments, custom profiles, and profile binding maps from a source NSX to a JSON + CSV file pair |
-| `Import-NSXSegments.ps1` | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
-| `Remove-NSXSegments.ps1` | Interactively selects and deletes segments and/or profiles, with a typed confirmation gate |
-| `NSXSM-Common.ps1` | Shared helpers the three scripts load: REST calls, pickers, prompts and credentials. Not run on its own |
-| `tests/New-NSXSMTestSet.ps1` | Builds, shows and removes a throwaway `NSXSM-T-*` test set in a **lab** NSX Manager |
-| `tests/New-NSXSMScaleSet.ps1` | Builds and removes a large `NSXSM-S-*` set (default 500 segments) in a **lab** NSX Manager |
+| Script | Version | Purpose |
+|--------|---------|---------|
+| `Export-NSXSegments.ps1` | 2.7.0 | Exports segments, custom profiles, and profile binding maps from a source NSX to a JSON + CSV file pair |
+| `Import-NSXSegments.ps1` | 3.3.0 | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
+| `Remove-NSXSegments.ps1` | 1.9.0 | Interactively selects and deletes segments and/or profiles, with a typed confirmation gate |
+| `NSXSM-Common.ps1` | 1.3.0 | Shared helpers the three scripts load: REST calls, pickers, prompts and credentials. Not run on its own |
+| `tests/New-NSXSMTestSet.ps1` | 1.0.2 | Builds, shows and removes a throwaway `NSXSM-T-*` test set in a **lab** NSX Manager |
+| `tests/New-NSXSMScaleSet.ps1` | 0.1.1 | Builds and removes a large `NSXSM-S-*` set (default 500 segments) in a **lab** NSX Manager |
 
 **Keep the scripts and `NSXSM-Common.ps1` together.** Copy the whole folder to the jump host, not one script: each script loads `NSXSM-Common.ps1` from its own folder and stops with a message (exit code 1) when it is missing or older than the script needs. The banner shows the version of both.
 
