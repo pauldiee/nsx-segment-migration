@@ -16,7 +16,15 @@
     CSV name-mapping rules
     ----------------------
     Rows where NewName = OldName (or NewName is blank) are treated as no-op.
-    Segment rows        : renames the segment display_name and id.
+    Segment rows        : renames the segment display_name.
+
+    Segment ids
+    -----------
+    A segment's id on the target is always its display name (the CSV's NewName
+    when renamed), not the source id: a segment with id 'a1b2c3...' and name
+    'web-prod' becomes id 'web-prod'. NSX refuses spaces, slashes, percent
+    signs, backslashes and semicolons in an id; those (and ? and #) become '_',
+    and the log says so: 'app 10' gets id 'app_10'.
     SegmentProfile rows : renames the profile; all binding paths auto-updated.
     T1Gateway rows      : remaps the connectivity_path T1 reference.
 
@@ -36,6 +44,10 @@
     segment or profile that is already there is skipped and listed (binding
     maps then point at the existing profile). Pass -UpdateExisting to PATCH
     them anyway, for example to re-apply an export after a partial run.
+    A segment counts as already there when the target has its id or its
+    display name, so a segment imported earlier under the source id is not
+    created a second time; -UpdateExisting then PATCHes that one, under its
+    existing id.
 
     Exit codes
     ----------
@@ -185,7 +197,7 @@
 
 .NOTES
     Script   : Import-NSXSegments.ps1
-    Version  : 3.3.0
+    Version  : 3.4.0
     Author   : Paul van Dieen
     Blog     : https://www.hollebollevsan.nl
     Requires : PowerShell 5.1 or later (7 recommended); NSXSM-Common.ps1 1.3.0 in the same folder; no PowerCLI
@@ -198,6 +210,15 @@
 #>
 
 <# CHANGELOG
+    v3.4.0  2026-11-27  Paul van Dieen
+        - A segment's id on the target is always its display name (or the
+          CSV's NewName), not the source id (#26; seen at a customer: the
+          source id was taken over). Characters NSX refuses in an id (space,
+          /, %, \, ;) and ? and # become '_', logged per name
+        - Already on the target: by id or by display name, so a segment
+          imported earlier under the source id is not created a second time;
+          -UpdateExisting PATCHes it under its existing id
+
     v3.3.0  2026-11-27  Paul van Dieen
         - Exit codes as in the vCenter toolkits (#24): a failed profile,
           segment or binding map now gives 1 (was 2); 2 means a prompt
@@ -469,8 +490,27 @@ function Resolve-Name {
         $Obj.id           = $newName
         Write-Verbose "      [RENAME] $Type '$oldName' -> '$newName'"
     }
+    # A segment's id on the target is always its display name (#26): the
+    # source id (a UUID, or an id that differs from the name) is not taken over
+    if ($Type -eq 'Segment') { $Obj.id = ConvertTo-SegmentId -Name $Obj.display_name }
     return $Obj
 }
+
+function ConvertTo-SegmentId {
+    # The id a segment gets from its display name (#26). NSX refuses an id
+    # that "contains spaces or slashes or percent signs or backslashes or
+    # semicolons or made only of periods" (HTTP 400, NSX 9.0.2), and '?' and
+    # '#' would break the API path: those become '_' (logged once per name).
+    param([string]$Name)
+    $id = ($Name.Trim()) -replace '[ /\\%;?#]', '_'
+    if ($id -match '^\.+$') { $id = $id -replace '\.', '_' }
+    if ($id -ne $Name -and -not $script:IdNoted.Contains($Name)) {
+        [void]$script:IdNoted.Add($Name)
+        Write-Host "      [ID] Segment '$Name' gets id '$id' (characters that can't be in an id replaced)" -ForegroundColor Yellow
+    }
+    return $id
+}
+$script:IdNoted = [System.Collections.Generic.HashSet[string]]::new()
 
 function Select-Segments {
     # Segment picker (#10): see Select-FromList
@@ -848,7 +888,7 @@ function Confirm-OverlaySegmentConfig {
 #  SCRIPT METADATA
 # =============================================================================
 
-$scriptVersion = '3.3.0'
+$scriptVersion = '3.4.0'
 $scriptAuthor  = 'Paul van Dieen'
 $scriptBlogUrl = 'https://www.hollebollevsan.nl'
 
@@ -1072,15 +1112,42 @@ $disconnectedList = [System.Collections.Generic.List[object]]::new()
 # skipped unless -UpdateExisting.
 Write-Host "`n      Checking the target for segments and profiles that already exist ..." -ForegroundColor Cyan
 $targetSegIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($ts in (Get-AllPages -Path '/policy/api/v1/infra/segments')) { [void]$targetSegIds.Add($ts.id) }
+# Display name -> id of the segments on the target (#26): a segment imported
+# earlier under its source id is found by its name, so a rerun doesn't create
+# a second segment with the same name next to it
+$targetSegIdByName = @{}
+foreach ($ts in (Get-AllPages -Path '/policy/api/v1/infra/segments')) {
+    [void]$targetSegIds.Add($ts.id)
+    $tdn = if ($ts.PSObject.Properties['display_name']) { "$($ts.display_name)" } else { '' }
+    if ($tdn -and -not $targetSegIdByName.ContainsKey($tdn)) { $targetSegIdByName[$tdn] = $ts.id }
+}
 $targetProfiles = Get-TargetProfiles
 
-function Get-TargetId {
-    # The id an object gets on the target: the CSV's NewName when renamed, else its own id
+function Get-TargetName {
+    # The display name an object gets on the target: the CSV's NewName when renamed
     param($Obj, [string]$Type)
+    $dn = if ($Obj.PSObject.Properties['display_name']) { "$($Obj.display_name)" } else { '' }
+    if ($dn -and $nameMap[$Type].ContainsKey($dn)) { return $nameMap[$Type][$dn] }
+    return $dn
+}
+function Get-TargetId {
+    # The id an object gets on the target: for a segment its (new) display
+    # name (#26); for a profile the CSV's NewName when renamed, else its own id
+    param($Obj, [string]$Type)
+    if ($Type -eq 'Segment') { return ConvertTo-SegmentId -Name (Get-TargetName -Obj $Obj -Type $Type) }
     $dn = if ($Obj.PSObject.Properties['display_name']) { $Obj.display_name } else { '' }
     if ($dn -and $nameMap[$Type].ContainsKey($dn)) { return $nameMap[$Type][$dn] }
     return $Obj.id
+}
+function Get-ExistingSegmentId {
+    # The id of this segment on the target when it is already there: by its
+    # target id, else by its target display name (#26). $null when it isn't.
+    param($Obj)
+    $tid = Get-TargetId -Obj $Obj -Type 'Segment'
+    if ($targetSegIds.Contains($tid)) { return $tid }
+    $tn = Get-TargetName -Obj $Obj -Type 'Segment'
+    if ($tn -and $targetSegIdByName.ContainsKey($tn)) { return $targetSegIdByName[$tn] }
+    return $null
 }
 function Get-ProfileType {
     param([string]$Path)
@@ -1089,13 +1156,19 @@ function Get-ProfileType {
     return $null
 }
 
-$existingSegs = @($selectedSegments | Where-Object { $targetSegIds.Contains((Get-TargetId -Obj $_ -Type 'Segment')) })
+$existingSegs = @($selectedSegments | Where-Object { $null -ne (Get-ExistingSegmentId -Obj $_) })
 $existingProfiles = @($profilesToImport | Where-Object {
     $pt = Get-ProfileType -Path $_.path
     $pt -and $targetProfiles.ContainsKey("$pt|$(Get-TargetId -Obj $_ -Type 'SegmentProfile')")
 })
 $existingSegIdSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($e in $existingSegs) { [void]$existingSegIdSet.Add((Get-TargetId -Obj $e -Type 'Segment')) }
+# target id this import would use -> id the segment really has on the target
+$existingSegActualId = @{}
+foreach ($e in $existingSegs) {
+    $tid = Get-TargetId -Obj $e -Type 'Segment'
+    [void]$existingSegIdSet.Add($tid)
+    $existingSegActualId[$tid] = Get-ExistingSegmentId -Obj $e
+}
 
 if ($existingSegs.Count -eq 0 -and $existingProfiles.Count -eq 0) {
     Write-Host "      None of the selected segments or profiles exist on the target yet."
@@ -1104,7 +1177,14 @@ if ($existingSegs.Count -eq 0 -and $existingProfiles.Count -eq 0) {
     Write-Host "      Already on the target, $($action):" -ForegroundColor Yellow
     $shown = 0
     foreach ($e in $existingProfiles) { if ($shown -lt 20) { Write-Host "        profile  $(Get-TargetId -Obj $e -Type 'SegmentProfile')" -ForegroundColor Yellow }; $shown++ }
-    foreach ($e in $existingSegs)     { if ($shown -lt 20) { Write-Host "        segment  $(Get-TargetId -Obj $e -Type 'Segment')" -ForegroundColor Yellow }; $shown++ }
+    foreach ($e in $existingSegs) {
+        if ($shown -lt 20) {
+            $tid = Get-TargetId -Obj $e -Type 'Segment'; $aid = $existingSegActualId[$tid]
+            $note = if ($aid -and $aid -ne $tid) { "  (on the target with id '$aid', found by its name)" } else { '' }
+            Write-Host "        segment  $(Get-TargetName -Obj $e -Type 'Segment')$note" -ForegroundColor Yellow
+        }
+        $shown++
+    }
     if ($shown -gt 20) { Write-Host "        ... and $($shown - 20) more" -ForegroundColor Yellow }
     Write-Host "      ($($existingProfiles.Count) profile(s), $($existingSegs.Count) segment(s))" -ForegroundColor Yellow
 }
@@ -1223,6 +1303,12 @@ foreach ($segment in $selectedSegments) {
         Write-Host "      $counter [EXISTS] $($s.display_name) - left as is" -ForegroundColor Yellow
         $skipSegments++
         continue
+    }
+    # -UpdateExisting on a segment found by its name under another id (#26):
+    # PATCH that one, so the target doesn't get a second segment with the name
+    if ($existingSegIdSet.Contains($s.id) -and $existingSegActualId[$s.id] -and $existingSegActualId[$s.id] -ne $s.id) {
+        Write-Verbose "      [EXISTS] '$($s.display_name)' has id '$($existingSegActualId[$s.id])' on the target; updating that one"
+        $s.id = $existingSegActualId[$s.id]
     }
 
     # -Disconnected: drop the gateway connection, keep the subnets. Remember

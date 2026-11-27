@@ -23,7 +23,7 @@ nsx-segment-migration carries NSX segments and segment profiles over in a side-b
 | Script | Version | Purpose |
 |--------|---------|---------|
 | `Export-NSXSegments.ps1` | 2.7.0 | Exports segments, custom profiles, and profile binding maps from a source NSX to a JSON + CSV file pair |
-| `Import-NSXSegments.ps1` | 3.3.0 | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
+| `Import-NSXSegments.ps1` | 3.4.0 | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
 | `Remove-NSXSegments.ps1` | 1.9.0 | Interactively selects and deletes segments and/or profiles, with a typed confirmation gate |
 | `NSXSM-Common.ps1` | 1.3.0 | Shared helpers the three scripts load: REST calls, pickers, prompts and credentials. Not run on its own |
 | `tests/New-NSXSMTestSet.ps1` | 1.0.2 | Builds, shows and removes a throwaway `NSXSM-T-*` test set in a **lab** NSX Manager |
@@ -86,7 +86,7 @@ Open the CSV in Excel or any text editor. Fill in the `NewName` column for any o
 
 | Type | Controls | Edit when... |
 |------|----------|--------------|
-| `Segment` | Segment display_name and id | You want a different name on the target |
+| `Segment` | Segment display_name (and so its id, see below) | You want a different name on the target |
 | `SegmentProfile` | Profile name; binding paths update automatically | Profile should be renamed |
 | `T1Gateway` | T1 gateway in connectivity_path | The segment should connect to another Tier-1 on the target: its id, or its name (from v3.2; used when exactly one Tier-1 on the target has that name). VCF gives its Tier-1s a UUID as id, so the name is easier |
 
@@ -223,7 +223,11 @@ Objects are always imported in this sequence to satisfy dependencies:
 
 ### Objects that already exist on the target
 
-From v2.7 the import first lists the segments and profiles on the target. A PATCH merges into an existing object with the same id, so before v2.7 an import silently changed a segment or profile that was already there. Now a selected segment or profile that exists is **skipped** and listed (`[EXISTS]`, and in the summary); binding maps then point at the existing profile. Pass `-UpdateExisting` to PATCH them anyway, for example to re-apply an export after a partial run. A renamed object (CSV `NewName`) is checked under its new id.
+From v2.7 the import first lists the segments and profiles on the target. A PATCH merges into an existing object with the same id, so before v2.7 an import silently changed a segment or profile that was already there. Now a selected segment or profile that exists is **skipped** and listed (`[EXISTS]`, and in the summary); binding maps then point at the existing profile. Pass `-UpdateExisting` to PATCH them anyway, for example to re-apply an export after a partial run. A renamed object (CSV `NewName`) is checked under its new id. From v3.4.0 a segment also counts as already there when the target has a segment with its display name, whatever the id: a segment imported earlier under the source id is not created a second time, and `-UpdateExisting` PATCHes it under its existing id.
+
+### Segment ids
+
+From v3.4.0 a segment's id on the target is always its display name (the CSV's `NewName` when renamed), not the source id. Before, a segment created with an id that differs from its name (a UUID, for example) kept that id on the target. NSX refuses an id that *"contains spaces or slashes or percent signs or backslashes or semicolons"* (HTTP 400, NSX 9.0.2); those characters, and `?` and `#`, become `_`, and the log says so: `app 10` gets id `app_10`. A segment that is already on the target under another id keeps that id (NSX can't change an id); to give it the name as id, remove it and import it again.
 
 ### Exit codes
 
@@ -394,6 +398,11 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v3.4.0 — Import
+- A segment's id on the target is always its display name (or the CSV `NewName`), not the source id (#26). Characters NSX refuses in an id become `_`. See Segment ids.
+- Already on the target: by id or display name, so no second segment next to one imported earlier under the source id.
+- Tested NSX 4.2.4.1 to 9.0.2 (`tests/TESTPLAN.md`, I1 to I5).
 
 ### v2.7.0 — Export / v3.3.0 — Import / v1.9.0 — Remove / v1.3.0 — NSXSM-Common
 - Exit codes as in the vCenter toolkits (#24): 1 = something failed (a profile, segment, binding map or a fatal error; was 2 for failed objects), 2 = a prompt needed console input (was 1). See Exit codes.
