@@ -53,12 +53,14 @@ Import `-SegmentFilter`: **pass**, on PowerShell 7 and (Import picker) 5.1.
 | # | Steps | Result |
 |---|---|---|
 | C1 | Remove `-Confirm` on `Ovl-GW1` (five binding maps) and `Ovl-GW2`, typed `YES`, No for GW1, Yes for GW2 | **pass**: GW2 removed; GW1 kept with all five binding maps (checked with `-Mode Show`). The summary still says "All selected objects deleted successfully" with 1 OK and GW1 not counted |
-| P1 | Powered-on dummy VM (no OS, one vNIC) on `Ovl-NoGW`; Remove `-WhatIf` on `Ovl-GW1`, `Ovl-NoGW`, `VLAN199`, with and without `-NoSearch` | **pass**: both routes warn "'NSXSM-T-Ovl-NoGW' has 1 port(s) still attached", nothing for the others |
-| P2 | Remove (typed `YES`) on `Ovl-NoGW` with the VM attached | **pass**: `[FAIL]` with NSX's message ("cannot be deleted as it has 1 VMs or VIFs attached"), exit 2 |
+| P1 | Powered-on dummy VM (no OS, one vNIC) on `Ovl-NoGW`; Remove `-WhatIf` on `Ovl-GW1`, `Ovl-NoGW`, `VLAN199`, with and without `-NoSearch` | **pass**: both routes warn "'NSXSM-T-Ovl-NoGW' has 1 port(s) still attached", nothing for the others. 2026-11-27 with Remove 1.7: **pass**, same result |
+| P2 | Remove (typed `YES`) on `Ovl-NoGW` with the VM attached | **pass**: `[FAIL]` with NSX's message ("cannot be deleted as it has 1 VMs or VIFs attached"), exit 2. 2026-11-27 with Remove 1.7: **pass**, same message, exit 2 when started with `pwsh -File`; through `pwsh -Command "& ..."` the process reports 1 (PowerShell maps any non-zero code to 1 there; README notes it) |
 
 After the dummy VM was deleted in vCenter, NSX kept its segment port
 (`<vm>.vmx@<uuid>`) for several minutes and refused the segment DELETE;
 the port was removed through the Policy API before the set's `-Mode Remove`.
+On 2026-11-27 the port was gone about one minute after the VM was deleted;
+the set's `-Mode Remove` then ran clean without touching the API by hand.
 
 Not covered yet: the retry after a lagging search index.
 
@@ -93,7 +95,9 @@ Not rerun for #11: the scale set (S0 to S3) and the NB cases; the moved code is 
 | S2 | NB | Import into NB itself as `NSXSM-C-*`, `-Disconnected`: `-WhatIf`, real, again | **pass**: dry run 0:03 (500 segments and 150 bindings would be written, 5 profiles on target); real 1:08, 500 / 150 OK, closing line "Imported 500 segment(s) ...; 5 profile(s) already on the target"; again 0:03, "Nothing imported: 500 segment(s) and 5 profile(s) ..." |
 | S3 | NB | Remove of the 500 `NSXSM-C-*` segments | **pass**: 1:06, 500 OK, none left |
 
-Still open: F3 into NA (NSX 9.1.1), the retry after a lagging search index, and the NB port cases P1/P2 with these versions (dummy VM needed).
+P1/P2 rerun on 2026-11-27 (see the `-Confirm` and ports table). The dummy VM `NSXSM-T-Dummy` (1 vCPU, 128 MB, 16 MB thin disk, guest `otherGuest64`, no OS) was made with PowerCLI on the lab vCenter and deleted after the test.
+
+Still open: F3 into NA (NSX 9.1.1) and the retry after a lagging search index.
 
 ## Open points
 
