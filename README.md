@@ -194,6 +194,7 @@ From v2.4 the binding maps are read with the NSX search API: three calls in tota
 | `-InputPath` | Yes | — | Path to the `.json` file from Export |
 | `-MappingPath` | No | Same path as InputPath with `.csv` extension | Explicit path to the CSV name-mapping file |
 | `-TransportZoneId` | No | Interactive menu | Transport zone id to apply to all imported segments |
+| `-KeepSourceTransportZone` | No | — | Keep the transport zone from the export on every segment, without the menu; not together with `-TransportZoneId` |
 | `-SegmentFilter` | No | `*` | Wildcard filter on the exported segments' display_name, before the menu |
 | `-Disconnected` | No | — | Import the selected segments without a gateway connection (`connectivity_path` removed, subnets kept); skips the overlay prompts |
 | `-UpdateExisting` | No | — | PATCH selected segments and profiles that already exist on the target (same id) instead of skipping them |
@@ -224,9 +225,11 @@ To read the exit code from another process (a scheduled task, a pipeline), start
 
 ### Transport zone selection
 
-After connecting, an interactive menu lists all transport zones on the target NSX. Select one to apply it to all imported segments, or press Enter to keep the transport zone from the export file. Supply `-TransportZoneId` on the command line to skip the menu.
+After connecting, an interactive menu lists all transport zones on the target NSX. Select one to apply it to all imported segments, or press Enter to keep the transport zone from the export file. Supply `-TransportZoneId` on the command line to skip the menu, or `-KeepSourceTransportZone` to keep the zone from the export without the menu. The summary ends with the transport zone used (`Transport zone: overlay-vds01-mgmt-01a [OVERLAY_BACKED], chosen at the menu`).
 
 **Into another NSX Manager, always pick the transport zone.** Enter keeps the transport zone *id* from the export. NSX's own default zones, `nsx-overlay-transportzone` and `nsx-vlan-transportzone`, had the same id on both lab NSX Managers (4.2.4.1 and 9.0.2, 2026-11-27), so the import succeeds, but the segments land in the target's default zone. The hosts of a VCF domain are attached to the zone VCF created (in the lab `overlay-vds01-mgmt-01a`), so those segments are not on the hosts. Because one zone applies to the whole run, import overlay and VLAN segments in separate runs.
+
+From v3.0 the import guards against this. When the export's `source_manager` differs from `-NSXManager`, the menu says *Export is from another NSX Manager: pick one*, and Enter no longer keeps the source zone: it shows where the selected segments would land (the zone with the same id on the target, or *no zone with this id on the target*) and the menu again. Type a number, or `KEEP` if keeping the zone is what you want. Into the same manager (a re-import, a rollback) Enter works as before. The managers are compared by name, so an export made with the IP address and an import with the FQDN of the same manager also gets the question; answer `KEEP`. With `-KeepSourceTransportZone` the log shows the same landing lines and the import goes on.
 
 ### Overlay segment validation
 
@@ -331,7 +334,7 @@ All three scripts try both path formats automatically and use whichever responds
 
 ## Certificate Notes
 
-`-SkipCertCheck` bypasses TLS validation and works for self-signed certificates. If your NSX uses a certificate signed by an internal CA, you may still see validation errors because Windows cannot build a trust chain to the CA root. The fix is to import your CA certificate into the Windows Trusted Root store:
+`-SkipCertCheck` bypasses TLS validation and works for self-signed certificates. Without it, a self-signed certificate stops the script at *Verifying connectivity* with *"the certificate of the NSX Manager is not trusted: pass -SkipCertCheck ..."* (from NSXSM-Common 1.1). If your NSX uses a certificate signed by an internal CA, you may still see validation errors because Windows cannot build a trust chain to the CA root. The fix is to import your CA certificate into the Windows Trusted Root store:
 
 ```powershell
 Import-Certificate -FilePath "your-internal-ca.cer" `
@@ -360,6 +363,11 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v3.0 — Import / v1.1 — NSXSM-Common
+- Import: a transport zone from another NSX Manager is no longer kept silently (#17). When the export's `source_manager` differs from `-NSXManager`, Enter at the transport zone menu shows where the segments would land and the menu again; type a number or `KEEP`. New switch `-KeepSourceTransportZone`; the summary names the transport zone used. See Transport zone selection.
+- NSXSM-Common 1.1: a call without an HTTP answer (an untrusted certificate without `-SkipCertCheck`, DNS, a refused connection) stopped all three scripts with *"The property 'Response' cannot be found on this object"* instead of the real error (#18). The real error is shown now, with a hint to `-SkipCertCheck` when the certificate is not trusted.
+- Tested on NSX 4.2.4.1 to NSX 9.0.2 and 4.2.4.1 to itself, dry runs (`tests/TESTPLAN.md`, T1 to T7), on PowerShell 7 and 5.1. Export and Remove are unchanged (2.5 and 1.7) and pick up the fix through NSXSM-Common.
 
 ### v2.9 — Import / v1.7 — Remove
 - The closing line follows the counts (#13). Import ends with *"All items imported successfully!"* only when everything selected was written; otherwise *"Nothing imported: ..."* or *"Imported n segment(s) ...; m already on the target, left as is"*. Remove says *"n of m selected object(s) deleted; k declined at -Confirm and kept"* when you answered No. Exit codes are unchanged.

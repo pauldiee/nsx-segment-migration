@@ -56,7 +56,15 @@
     After connecting, an interactive menu lists all available transport zones.
     The selected TZ is applied to all imported segments. Press Enter to keep
     the transport zone from the export unchanged. Supply -TransportZoneId to
-    skip the menu entirely (useful for automation).
+    skip the menu entirely (useful for automation), or -KeepSourceTransportZone
+    to keep the zone from the export without the menu.
+
+    When the export comes from another NSX Manager (its source_manager differs
+    from -NSXManager), Enter does not keep the source zone: the menu says where
+    the segments would land (the zone with the same id on the target, or none)
+    and asks for a number or KEEP. NSX's own default zones have the same id on
+    every manager tested, so a kept zone can be the target's default zone,
+    which the hosts of a VCF domain don't use. The summary names the zone used.
 
     Overlay segment validation
     --------------------------
@@ -111,7 +119,13 @@
 .PARAMETER TransportZoneId
     Transport zone id to apply to all imported segments. If omitted, an
     interactive menu lets you choose from the transport zones on the target NSX.
-    Press Enter at the menu to keep the transport zone from the export unchanged.
+    Press Enter at the menu to keep the transport zone from the export unchanged
+    (type KEEP when the export comes from another NSX Manager).
+
+.PARAMETER KeepSourceTransportZone
+    Keep the transport zone from the export on every segment, without the menu.
+    When the export comes from another NSX Manager, the log shows where the
+    segments land on the target. Can't be combined with -TransportZoneId.
 
 .PARAMETER Disconnected
     Import the selected segments without a gateway connection (removes
@@ -159,7 +173,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 2.9
+    Version : 3.0
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -168,6 +182,16 @@
 
     Changelog
     ---------
+    3.0 - Transport zone from another NSX Manager (#17): when the export's
+          source_manager differs from -NSXManager, Enter at the transport
+          zone menu no longer keeps the source zone silently. The menu says
+          where the segments would land (the zone with the same id on the
+          target, or none) and asks for a number or KEEP. Found in the lab:
+          NSX's default zones have the same id on NSX 4.2.4.1 and 9.0.2, so
+          Enter put a segment in the target's default overlay zone without
+          an error. Same manager: Enter works as before. New switch
+          -KeepSourceTransportZone keeps the source zone without the menu.
+          The summary names the transport zone used.
     2.9 - Closing line from the counts (#13): "Nothing imported: ..." when
           everything selected was already on the target (or declined), and
           "Imported n segment(s) ...; m already on the target" when part of
@@ -242,6 +266,8 @@ param(
     [string]$MappingPath,
 
     [string]$TransportZoneId,
+
+    [switch]$KeepSourceTransportZone,
 
     [switch]$Disconnected,
 
@@ -376,48 +402,120 @@ function Select-Segments {
     return Select-FromList -Items $Segments -Title 'SELECT SEGMENTS TO IMPORT' -LineText { param($s) Get-SegmentLine -Seg $s }
 }
 
+function Get-ManagerKey {
+    # Normalised manager name for comparing the export's source_manager with
+    # the target (#17): lower case, without scheme, port or trailing slash.
+    param([string]$Name)
+    $n = "$Name".Trim().ToLowerInvariant()
+    $n = $n -replace '^https?://', '' -replace '/+$', '' -replace ':\d+$', ''
+    return $n
+}
+
+function Get-SourceTzLanding {
+    # Where the selected segments land when their transport zone from the
+    # export is kept (#17): per distinct source TZ id, the zone with that id on
+    # the target, or 'not on the target'. Returns one line per zone.
+    param([array]$Segments, [array]$TargetTzs)
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $ids = @($Segments | ForEach-Object {
+        if ($_.PSObject.Properties['transport_zone_path'] -and $_.transport_zone_path) { ($_.transport_zone_path -split '/')[-1] } else { '(none)' }
+    } | Sort-Object -Unique)
+    foreach ($id in $ids) {
+        $count  = @($Segments | Where-Object {
+            $sid = if ($_.PSObject.Properties['transport_zone_path'] -and $_.transport_zone_path) { ($_.transport_zone_path -split '/')[-1] } else { '(none)' }
+            $sid -eq $id
+        }).Count
+        $srcName = if ($script:TzNames -and $script:TzNames.ContainsKey($id)) { $script:TzNames[$id] } else { $id }
+        $match   = @($TargetTzs | Where-Object { $_.id -eq $id })
+        $landing = if ($match.Count -gt 0) {
+            $type = if ($match[0].PSObject.Properties['tz_type'] -and $match[0].tz_type) { $match[0].tz_type } else { 'UNKNOWN' }
+            "lands in '$($match[0].display_name)' [$type] on the target"
+        } elseif ($id -eq '(none)') {
+            'no transport zone in the export'
+        } else {
+            'no zone with this id on the target'
+        }
+        $lines.Add(("{0} segment(s) from '{1}': {2}" -f $count, $srcName, $landing))
+    }
+    return @($lines)
+}
+
 function Select-TransportZone {
     # Fetches all transport zones from the target NSX and presents a numbered
-    # selection menu. Returns a PSCustomObject with 'id' and 'tz_type' properties,
-    # or $null if the operator presses Enter to keep the source transport zone.
+    # selection menu. Returns a PSCustomObject with 'id', 'tz_type' and 'name',
+    # or $null when the transport zone from the export is kept.
+    # When the export comes from another NSX Manager (#17), Enter doesn't keep
+    # the source zone silently: the menu shows where the segments would land
+    # and asks for KEEP or a number; plain Enter shows the menu again.
+    param([array]$Segments, [string]$SourceManager, [bool]$OtherManager)
     $tzPath = '/policy/api/v1/infra/sites/default/enforcement-points/default/transport-zones'
     try {
         $allTzs = @(Get-AllPages -Path $tzPath)
     } catch {
         Write-Warning "      Could not fetch transport zones: $_"
+        if ($OtherManager) { throw "Could not read the transport zones of the target, and the export comes from another NSX Manager ($SourceManager). Run again with -TransportZoneId, or -KeepSourceTransportZone to keep the zone from the export." }
         return $null
     }
 
     if ($allTzs.Count -eq 0) {
         Write-Warning "      No transport zones found on target NSX"
+        if ($OtherManager) { throw "No transport zones found on the target, and the export comes from another NSX Manager ($SourceManager). Run again with -TransportZoneId, or -KeepSourceTransportZone to keep the zone from the export." }
         return $null
     }
 
     $sorted = @($allTzs | Sort-Object display_name)
     $total  = $sorted.Count
 
-    Write-Host ""
-    Write-Host "+--------------------------------------------------+" -ForegroundColor Yellow
-    Write-Host "|  SELECT TARGET TRANSPORT ZONE                    |" -ForegroundColor Yellow
-    Write-Host "|  Applied to all imported segments.               |" -ForegroundColor Yellow
-    Write-Host "|  Press Enter to keep the TZ from the export.    |" -ForegroundColor Yellow
-    Write-Host "+--------------------------------------------------+" -ForegroundColor Yellow
-    Write-Host ""
-
-    for ($i = 0; $i -lt $total; $i++) {
-        $tz   = $sorted[$i]
-        $num  = ($i + 1).ToString().PadLeft($total.ToString().Length)
-        $type = if ($tz.PSObject.Properties['tz_type'] -and $tz.tz_type) { $tz.tz_type } else { 'UNKNOWN' }
-        Write-Host ("  [{0}] {1}  [{2}]" -f $num, $tz.display_name, $type)
+    $showMenu = {
+        Write-Host ""
+        Write-Host "+--------------------------------------------------+" -ForegroundColor Yellow
+        Write-Host "|  SELECT TARGET TRANSPORT ZONE                    |" -ForegroundColor Yellow
+        Write-Host "|  Applied to all imported segments.               |" -ForegroundColor Yellow
+        if ($OtherManager) {
+        Write-Host "|  Export is from another NSX Manager: pick one.   |" -ForegroundColor Yellow
+        } else {
+        Write-Host "|  Press Enter to keep the TZ from the export.     |" -ForegroundColor Yellow
+        }
+        Write-Host "+--------------------------------------------------+" -ForegroundColor Yellow
+        Write-Host ""
+        for ($i = 0; $i -lt $total; $i++) {
+            $tz   = $sorted[$i]
+            $num  = ($i + 1).ToString().PadLeft($total.ToString().Length)
+            $type = if ($tz.PSObject.Properties['tz_type'] -and $tz.tz_type) { $tz.tz_type } else { 'UNKNOWN' }
+            Write-Host ("  [{0}] {1}  [{2}]" -f $num, $tz.display_name, $type)
+        }
+        Write-Host ""
     }
+    & $showMenu
 
-    Write-Host ""
-
+    $warned = $false
     while ($true) {
-        $raw = Read-Answer "  Select (or Enter to keep existing)"
+        $prompt = if ($OtherManager) { "  Select a number (or KEEP to keep the zone from the export)" } else { "  Select (or Enter to keep existing)" }
+        $raw = Read-Answer $prompt
 
         if (-not $raw) {
-            Write-Host "  Keeping transport zone from export" -ForegroundColor Gray
+            if (-not $OtherManager) {
+                Write-Host "  Keeping transport zone from export" -ForegroundColor Gray
+                Write-Host ""
+                return $null
+            }
+            # Another manager: explain once, then show the menu again (#17)
+            if (-not $warned) {
+                Write-Host ""
+                Write-Host "  The export comes from another NSX Manager ($SourceManager)." -ForegroundColor Yellow
+                Write-Host "  Keeping the zone from the export means:" -ForegroundColor Yellow
+                foreach ($l in (Get-SourceTzLanding -Segments $Segments -TargetTzs $sorted)) { Write-Host "    - $l" -ForegroundColor Yellow }
+                Write-Host "  NSX's own default zones have the same id on every manager we tested, so a" -ForegroundColor Yellow
+                Write-Host "  segment can land in the target's default zone, which VCF hosts don't use." -ForegroundColor Yellow
+                Write-Host "  Pick the zone by number, or type KEEP if this is what you want." -ForegroundColor Yellow
+                $warned = $true
+            }
+            & $showMenu
+            continue
+        }
+
+        if ($OtherManager -and $raw -eq 'KEEP') {
+            Write-Host "  Keeping transport zone from export (KEEP)" -ForegroundColor Yellow
             Write-Host ""
             return $null
         }
@@ -429,11 +527,12 @@ function Select-TransportZone {
                 $type   = if ($chosen.PSObject.Properties['tz_type'] -and $chosen.tz_type) { $chosen.tz_type } else { 'UNKNOWN' }
                 Write-Host "  Selected: $($chosen.display_name)  [$type]" -ForegroundColor Green
                 Write-Host ""
-                return [PSCustomObject]@{ id = $chosen.id; tz_type = $type }
+                return [PSCustomObject]@{ id = $chosen.id; tz_type = $type; name = $chosen.display_name }
             }
         }
 
-        Write-Host "  Invalid selection - enter a number between 1 and $total, or press Enter to skip" -ForegroundColor Red
+        $hint = if ($OtherManager) { "or type KEEP to keep the zone from the export" } else { "or press Enter to skip" }
+        Write-Host "  Invalid selection - enter a number between 1 and $total, $hint" -ForegroundColor Red
     }
 }
 
@@ -574,7 +673,7 @@ function Confirm-OverlaySegmentConfig {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "2.9"
+    Version = "3.0"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -596,6 +695,7 @@ Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
 Write-Host ""
 
 # -- 1. Load export JSON ------------------------------------------------------
+if ($KeepSourceTransportZone -and $TransportZoneId) { throw 'Use -TransportZoneId or -KeepSourceTransportZone, not both.' }
 if (-not (Test-Path $InputPath)) { throw "Input file not found: $InputPath" }
 Write-Host "`n[1/5] Loading export file: $InputPath" -ForegroundColor Cyan
 $exportData = Get-Content $InputPath -Raw | ConvertFrom-Json
@@ -703,13 +803,33 @@ Write-Host "      NSX version : $($ver.product_version)" -ForegroundColor Green
 
 # Determine transport zone id and type.
 # The tz_type drives whether overlay validation is needed in the next step.
-if (-not $TransportZoneId) {
-    # Interactive picker - returns { id, tz_type } or $null to keep source TZ
-    $tzSelection = Select-TransportZone
+# Export from another NSX Manager (#17): keeping the source zone is then
+# almost never right, so Enter at the menu doesn't do it silently.
+$sourceManager = if ($exportData.PSObject.Properties['source_manager']) { "$($exportData.source_manager)" } else { '' }
+$otherManager  = [bool]($sourceManager -and (Get-ManagerKey $sourceManager) -ne (Get-ManagerKey $NSXManager))
+$script:TzUsedText = ''
+if ($KeepSourceTransportZone) {
+    $script:SelectedTzType = 'KEEP'
+    $script:TzUsedText     = 'kept from the export (-KeepSourceTransportZone)'
+    Write-Host "      -KeepSourceTransportZone: each segment keeps the transport zone from the export" -ForegroundColor Gray
+    if ($otherManager) {
+        Write-Host "      The export comes from another NSX Manager ($sourceManager):" -ForegroundColor Yellow
+        try {
+            $tzList = @(Get-AllPages -Path '/policy/api/v1/infra/sites/default/enforcement-points/default/transport-zones')
+            foreach ($l in (Get-SourceTzLanding -Segments $selectedSegments -TargetTzs $tzList)) { Write-Host "        - $l" -ForegroundColor Yellow }
+        } catch {
+            Write-Warning "      Could not read the transport zones of the target: $_"
+        }
+    }
+} elseif (-not $TransportZoneId) {
+    # Interactive picker - returns { id, tz_type, name } or $null to keep source TZ
+    $tzSelection = Select-TransportZone -Segments $selectedSegments -SourceManager $sourceManager -OtherManager $otherManager
     if ($tzSelection) {
         $TransportZoneId       = $tzSelection.id
         $script:SelectedTzType = $tzSelection.tz_type
+        $script:TzUsedText     = "$($tzSelection.name) [$($tzSelection.tz_type)], chosen at the menu"
     } else {
+        $script:TzUsedText     = if ($otherManager) { 'kept from the export (KEEP at the menu)' } else { 'kept from the export (Enter at the menu)' }
         # Operator pressed Enter - source TZ id is kept on each segment.
         # Type is unknown at this point; validation is skipped to be safe.
         $script:SelectedTzType = 'KEEP'
@@ -720,7 +840,9 @@ if (-not $TransportZoneId) {
     try {
         $tzObj = Invoke-NSXApi -Path "/policy/api/v1/infra/sites/default/enforcement-points/default/transport-zones/$TransportZoneId"
         $script:SelectedTzType = if ($tzObj.PSObject.Properties['tz_type']) { $tzObj.tz_type } else { 'UNKNOWN' }
+        $script:TzUsedText     = "$($tzObj.display_name) [$($script:SelectedTzType)], from -TransportZoneId"
     } catch {
+        $script:TzUsedText     = "$TransportZoneId, from -TransportZoneId"
         Write-Warning "      Could not look up type for TZ '$TransportZoneId' - overlay validation skipped"
         $script:SelectedTzType = 'UNKNOWN'
     }
@@ -1073,6 +1195,8 @@ if ($declinedProfiles + $declinedSegments + $declinedBindings -gt 0) {
     Write-Host "  Declined at -Confirm, not written: $declinedProfiles profile(s), $declinedSegments segment(s), $declinedBindings binding map(s)" -ForegroundColor Yellow
 }
 }
+
+if ($script:TzUsedText) { Write-Host "  Transport zone: $($script:TzUsedText)" -ForegroundColor Gray }
 
 if ($disconnectedList.Count -gt 0) {
     $verb = if ($dryRun) { 'Would be imported' } else { 'Imported' }

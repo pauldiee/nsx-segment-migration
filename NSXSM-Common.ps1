@@ -25,13 +25,19 @@
     copy.
 
 .NOTES
-    Version : 1.0
+    Version : 1.1
     Author  : Paul van Dieen
     Blog    : https://www.hollebollevsan.nl
     GitHub  : https://github.com/pauldiee/nsx-segment-migration
 
     Changelog
     ---------
+    1.1 - Invoke-NSXApi: a call that gets no HTTP answer (untrusted
+          certificate, DNS, refused connection) showed "The property
+          'Response' cannot be found on this object" instead of the real
+          error, because StrictMode stops on the missing property (#18).
+          The real error is shown now, with a hint to -SkipCertCheck when
+          the certificate is not trusted.
     1.0 - The helpers that Export 2.4, Import 2.7 and Remove 1.5 each
           carried as their own copy, moved here unchanged (#11). Taken from
           Import 2.7; the copies differed only in comments and in
@@ -43,7 +49,7 @@ Set-StrictMode -Version Latest
 
 # Read by the scripts: they stop when this file is older than they need,
 # and show it in their banner.
-$NSXSMCommonVersion = '1.0'
+$NSXSMCommonVersion = '1.1'
 
 # =============================================================================
 #  REST
@@ -98,10 +104,20 @@ function Invoke-NSXApi {
         $response = Invoke-WebRequest @params
         if ($response.Content) { return ($response.Content | ConvertFrom-Json) }
     } catch {
-        $code = if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-            $_.Exception.Response.StatusCode.value__
+        # A failure without an HTTP answer (TLS, DNS, refused connection) has
+        # no Response property; under StrictMode reading it hid the real
+        # error behind "The property 'Response' cannot be found" (#18).
+        $resp = if ($_.Exception.PSObject.Properties['Response']) { $_.Exception.Response } else { $null }
+        $code = if ($resp -and $resp.PSObject.Properties['StatusCode'] -and $resp.StatusCode) {
+            [int]$resp.StatusCode
         } else { 'N/A' }
         $msg = Get-NSXErrorText -ErrorRecord $_
+        if ($code -eq 'N/A') {
+            $all = "$msg $($_.Exception.InnerException)"
+            if ($all -match 'SSL|certificate|trust relationship|RemoteCertificate') {
+                $msg += ' -- the certificate of the NSX Manager is not trusted: pass -SkipCertCheck for a self-signed certificate, or import the CA root.'
+            }
+        }
         Write-Verbose "  API error [$Method $Path] -> HTTP $code : $msg"
         throw "HTTP ${code}: $msg"
     }
