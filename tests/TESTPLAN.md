@@ -125,7 +125,8 @@ Not tested: an export with a custom zone whose id doesn't exist on the target (t
 | U5 | – | `Save-Credential` / `Get-SavedCredential` / `Remove-SavedCredential` for a made-up manager | **pass**: `<manager>.cred` next to the scripts, read back, removed |
 | U6 | – | `Write-Box` with long paths, a short box and a 300-character value | **pass**: the box grows with the content, borders aligned; the long value keeps its end (`...END.json`) |
 | U7 | – | Import with a missing `-InputPath` file | **pass**: "ERROR: Input file not found: ...", exit 1 |
-| U8 | N4 to NB | Full dry run without parameters, with a saved credential (manager picked by number), then Export and Remove without parameters | **open**: the saved credentials were removed on 2026-11-27; needs one interactive run per manager to save them again |
+| U8 | N4 to NB | Full dry run without parameters, with a saved credential (manager picked by number), then Export and Remove without parameters | **pass** (credentials saved again by hand, now `<manager>.cred` next to the scripts): the manager list shows the three saved managers newest first; Import (export picked from the list, lab B as `1`, `overlay-vds01-mgmt-01a`) dry run box with "Transport zone : overlay-vds01-mgmt-01a [OVERLAY_BACKED], chosen at the menu", exit 0; Export from N4 (`3`): box with full paths (shortened from the left at the console width), the next command with the full path, exit 0; Remove on lab B (`1`) `-WhatIf`, both lists skipped: "Nothing selected", exit 0 |
+| U9 | NA | Export without parameters, lab A (`2`) while it is down | **pass**: "ERROR: HTTP N/A: A connection attempt failed ...", one line, exit 1 |
 
 ## Open points
 
