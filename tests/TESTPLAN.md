@@ -62,6 +62,16 @@ the port was removed through the Policy API before the set's `-Mode Remove`.
 
 Not covered yet: the retry after a lagging search index.
 
+**Shared helpers in `NSXSM-Common.ps1` (#11; Export 2.5, Import 2.8, Remove 1.6, Common 1.0), 2026-11-27, N4:**
+
+| # | Steps | Result |
+|---|---|---|
+| R1 | A script alone in a folder; then next to a Common with version 0.9 | **pass**: "NSXSM-Common.ps1 not found next to this script" and "... older than 1.0", both exit 1 |
+| R2 | F1 and F2 again with the new versions | **pass**: export equal to the Export 2.4 export of the same morning (segments, profiles, binding maps, CSV; transport zone names the same, in another order); Import `-WhatIf`, real Import, Import again (all skipped) and Remove as with 2.7 / 1.5; afterwards the set equals the start |
+| R3 | Export on Windows PowerShell 5.1 | **pass**: search API route, same segments as on PowerShell 7 |
+
+Not rerun for #11: the scale set (S0 to S3) and the NB cases; the moved code is the same text as before.
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on
