@@ -26,9 +26,9 @@ repository.
 
 | # | Lab | Steps | Expected | Result |
 |---|---|---|---|---|
-| F1 | N4 to N4 | Create, Export the `NSXSM-T-Ovl-GW*` segments, rename them in the CSV, Import `-WhatIf`, Import `-Disconnected`, Show | Copies with Connectivity None, subnets and all profile bindings; cutover table names `NSXSM-T-T1` | 2026-11-16: **pass** |
-| F2 | N4 to N4 | `Remove-NSXSegments.ps1` on the copies | Bindings first, port check, typed `YES`, removed | 2026-11-16: **pass** |
-| F3 | N4 to NA | Export the whole set, Import into NSX 9.1.1 (gateway segments with `-Disconnected`, the others in separate runs, one transport zone per run) | Whole set imported; profiles on NSX 9's flat `/infra/<type>/` paths with all bindings | 2026-11-16: **pass** |
+| F1 | N4 to N4 | Create, Export the `NSXSM-T-Ovl-GW*` segments, rename them in the CSV, Import `-WhatIf`, Import `-Disconnected`, Show | Copies with Connectivity None, subnets and all profile bindings; cutover table names `NSXSM-T-T1` | 2026-11-16: **pass**. 2026-11-27, Export 2.4 / Import 2.7 on NSX 4.2.4.1: **pass**. Export via the search API 0:02 (4 segments, 5 profiles, GW1's 3 binding maps); `-NoSearch` gives the same segments, profiles and CSV, the binding maps differ only in property order. Copies `NSXSM-T-C-GW1/2` without gateway, subnets kept, 3 bindings on GW1. Import again: both segments and the 5 profiles skipped as existing, nothing written; the summary still ends "All items imported successfully!" |
+| F2 | N4 to N4 | `Remove-NSXSegments.ps1` on the copies | Bindings first, port check, typed `YES`, removed | 2026-11-16: **pass**. 2026-11-27, Remove 1.5 (search route) on NSX 4.2.4.1, `-SegmentFilter 'NSXSM-T-C-*'`, profiles skipped with Enter: **pass**, 2 segments removed in 0:03 (GW1 with its 3 binding maps); a new export of `NSXSM-T-*` equals the one before F1 |
+| F3 | N4 to NA | Export the whole set, Import into NSX 9.1.1 (gateway segments with `-Disconnected`, the others in separate runs, one transport zone per run) | Whole set imported; profiles on NSX 9's flat `/infra/<type>/` paths with all bindings | 2026-11-16: **pass** (Import 2.6). Not rerun with Import 2.7: NA not available |
 | F4 | NA | Remove the imported set | Removed | 2026-11-16: **pass** |
 
 ### B. Scale (New-NSXSMScaleSet.ps1)
@@ -64,9 +64,9 @@ Not covered yet: the retry after a lagging search index.
 
 ## Open points
 
-- N4 is the home lab and often powered off; the 4.x source cases date from
-  2026-11-16. The search API route (Export 2.4, Remove 1.5) has not run
-  against NSX 4.x yet: run F1 and F3 again when N4 is up.
+- The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on
+  2026-11-27 (F1, F2). F3 (N4 to NA) with Import 2.7 is still open, as long
+  as NA is not available.
 - S2 into a second NSX (NA to NB): dropped for this release (2026-11-26),
   NA is not available for some time. S2 ran into NB itself under new names
   (`NSXSM-C-*`); a cross-manager import of Import 2.7 is therefore not
