@@ -81,58 +81,86 @@
     <OutputBase>.csv   - Name-mapping table; edit NewName column before importing
 
 .NOTES
-    Version : 2.6
-    API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
-    Pair    : Import-NSXSegments.ps1
-    Author  : Paul van Dieen
-    Blog    : https://www.hollebollevsan.nl
-    GitHub  : https://github.com/pauldiee/nsx-segment-migration
+    Script   : Export-NSXSegments.ps1
+    Version  : 2.7.0
+    Author   : Paul van Dieen
+    Blog     : https://www.hollebollevsan.nl
+    Requires : PowerShell 5.1 or later (7 recommended); NSXSM-Common.ps1 1.3.0 in the same folder; no PowerCLI
+    Tested   : Lab, 2026-11-27: NSX 4.2.4.1 (home lab) and NSX 9.0.2 (Holodeck lab B),
+               PowerShell 7 and 5.1; NSX 9.1.1 (Holodeck lab A) up to 2026-11-16.
+               See tests/TESTPLAN.md
+    API      : NSX Policy REST API v1 (NSX 4.x and 9.x)
+    Pair     : Import-NSXSegments.ps1
+    GitHub   : https://github.com/pauldiee/nsx-segment-migration
 
-    Exit codes: 0 export written or nothing to export, 1 fatal error.
+    Exit codes: 0 export written or nothing to export; 1 something failed
+    (fatal error); 2 stopped because a prompt needed console input.
+#>
 
-    Changelog
-    ---------
-    2.6 - Interactive start (#20): without -NSXManager the script asks for
+<# CHANGELOG
+    v2.7.0  2026-11-27  Paul van Dieen
+        - Exit code 2 when a prompt needs console input and there is none,
+          as in the vCenter toolkits (#24); it was 1.
+        - Script header as in the other toolkits (#24): this changelog in
+          its own block with x.y.z versions, .NOTES with Requires and
+          Tested, $scriptVersion / $scriptAuthor / $scriptBlogUrl for the
+          banner. Needs NSXSM-Common.ps1 1.3.0.
+
+    v2.6.0  2026-11-27  Paul van Dieen
+        - Interactive start (#20): without -NSXManager the script asks for
           it (managers with a saved credential as numbers). The summary box
           fits its content and shows full paths; then the next command and,
-          on Windows, an offer to open the CSV.
-          The real error as one red ERROR: line instead of a PowerShell
-          error record. An untrusted certificate without -SkipCertCheck:
-          asks whether to go on without the check for this run. Saved
-          credentials as <manager>.cred next to the scripts, as in the
-          vCenter toolkits (creds\ and the profile file are still read).
-          Needs NSXSM-Common.ps1 1.2.
-    2.5 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
+          on Windows, an offer to open the CSV. The real error as one red
+          ERROR: line instead of a PowerShell error record. An untrusted
+          certificate without -SkipCertCheck: asks whether to go on without
+          the check for this run. Saved credentials as <manager>.cred next
+          to the scripts, as in the vCenter toolkits (creds\ and the profile
+          file are still read). Needs NSXSM-Common.ps1 1.2.
+
+    v2.5.0  2026-11-27  Paul van Dieen
+        - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
           calls, pickers, prompts and credentials. The script stops with a
           clear message when NSXSM-Common.ps1 is missing or older than 1.0;
-          the banner shows its version. Commands and parameters are the same.
-          Help: credentials are in creds\ next to the scripts (since #3),
-          not in the user profile.
-    2.4 - Scale (#10): profile binding maps via the NSX search API (three
+          the banner shows its version. Commands and parameters are the
+          same. Help: credentials are in creds\ next to the scripts (since
+          #3), not in the user profile.
+
+    v2.4.0  2026-11-26  Paul van Dieen
+        - Scale (#10): profile binding maps via the NSX search API (three
           calls instead of three per segment), with -NoSearch and an
           automatic fallback to per-segment GETs. Running count when reading
           per segment, quieter console. API errors show NSX's error_message.
-          Get-AllPages no longer grows an array with +=.
-          Segment picker as in VIFolderManager/VITagManager: filter on the
-          whole line (wildcard or /text: /VLAN, /T1:<name>, /TZ:<name>),
-          'reset', 'list', 'all', 'cancel'; long lists are shortened.
-    2.3 - Get-Help shows the full help again: blank line between
-          #Requires and the help block (without it Get-Help ignored
-          the whole help block).
-    2.2 - Prompts without console input stop with a clear message instead
-          of failing on .Trim() of $null. Credentials are saved in
+          Get-AllPages no longer grows an array with +=. Segment picker as
+          in VIFolderManager/VITagManager: filter on the whole line
+          (wildcard or /text: /VLAN, /T1:<name>, /TZ:<name>), 'reset',
+          'list', 'all', 'cancel'; long lists are shortened.
+
+    v2.3.0  2026-11-18  Paul van Dieen
+        - Get-Help shows the full help again: blank line between #Requires
+          and the help block (without it Get-Help ignored the whole help
+          block).
+
+    v2.2.0  2026-11-16  Paul van Dieen
+        - Prompts without console input stop with a clear message instead of
+          failing on .Trim() of $null. Credentials are saved in
           creds\<manager>.cred next to the script; the old file in the user
           profile is still read (#3).
-    2.1 - Added built-in credential save/reset via Resolve-Credential.
-          Replaced Get-Credential with Read-Host to fix null credential errors
-          in non-interactive PowerShell hosts under Set-StrictMode.
+
+    v2.1.0  2026-03-18  Paul van Dieen
+        - Added built-in credential save/reset via Resolve-Credential.
+          Replaced Get-Credential with Read-Host to fix null credential
+          errors in non-interactive PowerShell hosts under Set-StrictMode.
           Added $ScriptMeta branding banner (Name, Author, Blog, Date).
-    2.0 - Full rewrite. Clean comments, consistent style.
-          Profile binding maps exported via typed child paths.
-          NSX 4.x and 9.x profile path formats handled automatically.
-          Cursor-based pagination via Get-AllPages.
-    1.x - Initial versions. Interactive segment selection menu.
-          CSV name-mapping table. JSON export format.
+
+    v2.0.0  2026-03-18  Paul van Dieen
+        - Full rewrite. Clean comments, consistent style. Profile binding
+          maps exported via typed child paths. NSX 4.x and 9.x profile path
+          formats handled automatically. Cursor-based pagination via
+          Get-AllPages.
+
+    v1.x  before 2026-03-18  Paul van Dieen
+        - Initial versions. Interactive segment selection menu. CSV
+          name-mapping table. JSON export format.
 #>
 
 [CmdletBinding()]
@@ -161,14 +189,15 @@ if (-not (Test-Path -LiteralPath $commonPath)) {
     exit 1
 }
 . $commonPath
-if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.2') {
-    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.2. Copy the whole folder of this release." -ForegroundColor Red
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.3.0') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.3.0. Copy the whole folder of this release." -ForegroundColor Red
     exit 1
 }
 
 # A fatal error as one clear line instead of a PowerShell error record
 # pointing into NSXSM-Common.ps1; exit code 1 as before
-trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+# Exit codes as in the vCenter toolkits (#24): 2 when a prompt had no console input, 1 otherwise
+trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; if ($_.Exception.Message -like 'No console input*') { exit 2 }; exit 1 }
 
 # =============================================================================
 #  HELPER FUNCTIONS
@@ -207,11 +236,15 @@ function Select-Segments {
 #  SCRIPT METADATA
 # =============================================================================
 
+$scriptVersion = '2.7.0'
+$scriptAuthor  = 'Paul van Dieen'
+$scriptBlogUrl = 'https://www.hollebollevsan.nl'
+
 $ScriptMeta = @{
     Name    = "Export-NSXSegments.ps1"
-    Version = "2.6"
-    Author  = "Paul van Dieen"
-    Blog    = "https://www.hollebollevsan.nl"
+    Version = $scriptVersion
+    Author  = $scriptAuthor
+    Blog    = $scriptBlogUrl
     Date    = "2026-11-27"
 }
 

@@ -66,7 +66,7 @@ The summary shows both files with their full path and the import command for the
 
 ### Choosing segments (all three scripts)
 
-Every script shows a numbered list, one line per segment with its type, gateway and transport zone, for example `app-web  [overlay  T1:t1-prod  TZ:overlay-tz]` or `backup  [VLAN 120  TZ:vlan-tz]`. It works like the pickers in VIFolderManager and VITagManager:
+Every script shows a numbered list, one line per segment with its type, gateway and transport zone, for example `app-web  [overlay  T1:t1-prod  TZ:overlay-tz]` or `backup  [VLAN 120  no gateway  TZ:vlan-tz]`. It works like the pickers in VIFolderManager and VITagManager:
 
 | To | Type |
 |---|---|
@@ -152,7 +152,7 @@ $cred = Import-Clixml .\nsx-source.corp.local.cred
 
 The scripts need an interactive console for their menus. Without one (input redirected, a scheduled task) a prompt stops the script with *"No console input for the prompt ..."* instead of an unclear error, and the password prompt says to run the script once in a PowerShell window or pass `-Credential` (it waited forever before 1.2).
 
-A fatal error (no connection, file not found, an untrusted certificate you didn't accept) ends the script with one red `ERROR: ...` line and exit code 1.
+A fatal error (no connection, file not found, an untrusted certificate you didn't accept) ends the script with one red `ERROR: ...` line and exit code 1; a prompt without console input with exit code 2.
 
 ---
 
@@ -229,9 +229,15 @@ From v2.7 the import first lists the segments and profiles on the target. A PATC
 
 | Code | Meaning |
 |---|---|
+The same codes as the vCenter toolkits (VIRoleManager, VITagManager, ...) since v3.3.0 (#24):
+
+| Code | Meaning |
+|---|---|
 | 0 | Success, or a dry run |
-| 1 | Fatal error (no connection, file not found, ...) |
-| 2 | Finished with errors: a profile, segment or binding map failed; the Errors list shows NSX's own message |
+| 1 | Something failed: a profile, segment or binding map (the Errors list shows NSX's own message), or the script could not start (no connection, file not found, ...) |
+| 2 | Stopped because a prompt needed console input in an unattended run; run it once interactively (and save the credential), or pass the parameters |
+
+Up to v3.2 a failed object gave 2 and a missing console 1.
 
 To read the exit code from another process (a scheduled task, a pipeline), start the script with `pwsh -File .\Import-NSXSegments.ps1 ...`. With `pwsh -Command "& .\Import-NSXSegments.ps1 ..."` PowerShell reports 1 for any non-zero code, so 2 turns into 1. The same goes for Export and Remove.
 
@@ -328,7 +334,7 @@ Attached ports and binding maps are read with the NSX search API: one call for t
 
 ### Exit codes
 
-0 done (also: nothing selected, aborted, dry run), 1 fatal error, 2 finished with errors (the Errors list shows NSX's own message). Start it with `pwsh -File` to get the code in another process; `pwsh -Command` turns 2 into 1 (see the Import exit codes).
+0 done (also: nothing selected, aborted, dry run); 1 something failed: a segment or profile could not be deleted (the Errors list shows NSX's own message), or a fatal error; 2 stopped because a prompt needed console input. The same as Import and the vCenter toolkits since v1.9.0 (#24; up to v1.8 a failed object gave 2). Start it with `pwsh -File` to get the code in another process; `pwsh -Command` turns 2 into 1 (see the Import exit codes).
 
 ### Examples
 
@@ -388,6 +394,12 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v2.7.0 — Export / v3.3.0 — Import / v1.9.0 — Remove / v1.3.0 — NSXSM-Common
+- Exit codes as in the vCenter toolkits (#24): 1 = something failed (a profile, segment, binding map or a fatal error; was 2 for failed objects), 2 = a prompt needed console input (was 1). See Exit codes.
+- `/no gateway` in the pickers also picks VLAN segments without a gateway: their line now says `no gateway` too.
+- Script headers as in the other toolkits: versions as x.y.z, the changelog in its own `<# CHANGELOG #>` block after the help (dates of old entries from the git history), `.NOTES` with Script, Version, Author, Blog, Requires and Tested, `scriptVersion` for the banner.
+- Tested on NSX 4.2.4.1 to 9.0.2 (`tests/TESTPLAN.md`, E1 to E4).
 
 ### v3.2 — Import
 - Gateway check before anything is written (#22): a segment whose gateway is not on the target no longer fails with HTTP 404 after the profiles were written; the script asks per missing gateway (a target gateway, `D` without a gateway, `S` skip, `cancel`). See Gateway check.

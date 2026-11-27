@@ -141,6 +141,17 @@ Not tested: an export with a custom zone whose id doesn't exist on the target (t
 | G7 | `-Disconnected` | **pass**: no gateway check, cutover table "(-Disconnected)" as before |
 | G8 | G3 for real (no `-WhatIf`), then `New-NSXSMTestSet.ps1 -Mode Show` and Remove | **pass**: 2 segments OK, 3 binding maps OK, 5 profiles already there (left by the run above); Show: both on `847ece30-...` with their subnets, GW1 with all five profiles. Remove (typed `YES`) of the 2 segments and the 5 profiles, NB clean again. `New-NSXSMTestSet.ps1` first failed with "No credential file found (...\creds\...)": it still looked in `creds\` only; fixed in 1.0.2 (and the scale set script in 0.1.1) |
 
+**Export 2.7.0 / Import 3.3.0 / Remove 1.9.0 / Common 1.3.0 (#24), 2026-11-27:** exit codes as in the vCenter toolkits, `/no gateway` for VLAN, script headers.
+
+| # | Steps | Result |
+|---|---|---|
+| E1 | Export without parameters, stdin closed | **pass**: "ERROR: No console input for the prompt 'NSX Manager' ...", exit **2** (was 1); banner `v2.7.0`, `Common : v1.3.0` |
+| E2 | Import of `NSXSM-T-VLAN199` into NB with `-TransportZoneId nsxsm-does-not-exist` (real run) | **pass**: 5 profiles OK, segment `[FAIL] ... HTTP 400: Invalid transport zone path ...`, exit **1** (was 2). Profiles removed again with Remove, NB clean |
+| E3 | Import picker on the N4 export, `/no gateway` | **pass**: `NSXSM-T-VLAN199  [VLAN 199  no gateway  TZ:nsx-vlan-transportzone]`; the filter keeps 2 of 4 (`Ovl-NoGW` and `VLAN199`); dry run exit 0 |
+| E4 | Remove with answers in the wrong order (a picker got no input) | **pass**: "ERROR: No console input for the prompt 'Select' ...", exit **2** |
+
+`Get-Help` shows the synopsis of all four files after the header change.
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on

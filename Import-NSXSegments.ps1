@@ -39,8 +39,9 @@
 
     Exit codes
     ----------
-    0 success or dry run, 1 fatal error, 2 finished with errors (a profile,
-    segment or binding map failed; see the Errors list).
+    0 success or dry run; 1 something failed: a fatal error, or a profile,
+    segment or binding map failed (see the Errors list); 2 stopped because a
+    prompt needed console input. The same as the vCenter toolkits (#24).
 
     Credentials
     -----------
@@ -183,16 +184,31 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 3.2
-    API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
-    Pair    : Export-NSXSegments.ps1
-    Author  : Paul van Dieen
-    Blog    : https://www.hollebollevsan.nl
-    GitHub  : https://github.com/pauldiee/nsx-segment-migration
+    Script   : Import-NSXSegments.ps1
+    Version  : 3.3.0
+    Author   : Paul van Dieen
+    Blog     : https://www.hollebollevsan.nl
+    Requires : PowerShell 5.1 or later (7 recommended); NSXSM-Common.ps1 1.3.0 in the same folder; no PowerCLI
+    Tested   : Lab, 2026-11-27: NSX 4.2.4.1 (home lab) and NSX 9.0.2 (Holodeck lab B),
+               PowerShell 7 and 5.1; NSX 9.1.1 (Holodeck lab A) up to 2026-11-16.
+               See tests/TESTPLAN.md
+    API      : NSX Policy REST API v1 (NSX 4.x and 9.x)
+    Pair     : Export-NSXSegments.ps1
+    GitHub   : https://github.com/pauldiee/nsx-segment-migration
+#>
 
-    Changelog
-    ---------
-    3.2 - Gateway check before anything is written (#22): each selected
+<# CHANGELOG
+    v3.3.0  2026-11-27  Paul van Dieen
+        - Exit codes as in the vCenter toolkits (#24): a failed profile,
+          segment or binding map now gives 1 (was 2); 2 means a prompt
+          needed console input and there was none (was 1).
+        - Script header as in the other toolkits (#24): this changelog in
+          its own block with x.y.z versions, .NOTES with Requires and
+          Tested, $scriptVersion / $scriptAuthor / $scriptBlogUrl for the
+          banner. Needs NSXSM-Common.ps1 1.3.0.
+
+    v3.2.0  2026-11-27  Paul van Dieen
+        - Gateway check before anything is written (#22): each selected
           segment's gateway (after the CSV's Tier-1 remap) must exist on the
           target. Per missing gateway the script asks once: a gateway of the
           target, import without a gateway (subnets kept, listed for the
@@ -201,19 +217,22 @@
           were already written. The overlay check shows the target path.
           Failures are red lines without the WARNING: prefix; the transport
           zone line names the zone instead of its id.
-    3.1 - Interactive start (#20): without -InputPath the script lists the
+
+    v3.1.0  2026-11-27  Paul van Dieen
+        - Interactive start (#20): without -InputPath the script lists the
           exports in the current and the script folder (source manager,
           segments, profiles, date) to pick from; without -NSXManager it
-          asks for the target (managers with a saved credential as
-          numbers). The summary boxes fit their content, name the manager
-          and include the transport zone used.
-          The real error as one red ERROR: line instead of a PowerShell
-          error record. An untrusted certificate without -SkipCertCheck:
-          asks whether to go on without the check for this run. Saved
-          credentials as <manager>.cred next to the scripts, as in the
-          vCenter toolkits (creds\ and the profile file are still read).
-          Needs NSXSM-Common.ps1 1.2.
-    3.0 - Transport zone from another NSX Manager (#17): when the export's
+          asks for the target (managers with a saved credential as numbers).
+          The summary boxes fit their content, name the manager and include
+          the transport zone used. The real error as one red ERROR: line
+          instead of a PowerShell error record. An untrusted certificate
+          without -SkipCertCheck: asks whether to go on without the check
+          for this run. Saved credentials as <manager>.cred next to the
+          scripts, as in the vCenter toolkits (creds\ and the profile file
+          are still read). Needs NSXSM-Common.ps1 1.2.
+
+    v3.0.0  2026-11-27  Paul van Dieen
+        - Transport zone from another NSX Manager (#17): when the export's
           source_manager differs from -NSXManager, Enter at the transport
           zone menu no longer keeps the source zone silently. The menu says
           where the segments would land (the zone with the same id on the
@@ -223,7 +242,9 @@
           an error. Same manager: Enter works as before. New switch
           -KeepSourceTransportZone keeps the source zone without the menu.
           The summary names the transport zone used.
-    2.9 - Closing line from the counts (#13): "Nothing imported: ..." when
+
+    v2.9.0  2026-11-27  Paul van Dieen
+        - Closing line from the counts (#13): "Nothing imported: ..." when
           everything selected was already on the target (or declined), and
           "Imported n segment(s) ...; m already on the target" when part of
           it was skipped. "All items imported successfully!" only when
@@ -233,54 +254,75 @@
           -Disconnected cutover list holds only segments that were written
           (or would be, in a dry run); a declined or failed segment was
           listed as imported.
-    2.8 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
+
+    v2.8.0  2026-11-27  Paul van Dieen
+        - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
           calls, pickers, prompts and credentials. The script stops with a
           clear message when NSXSM-Common.ps1 is missing or older than 1.0;
-          the banner shows its version. Commands and parameters are the same.
-          Help: credentials are in creds\ next to the scripts (since #3),
-          not in the user profile.
-    2.7 - Scale and safety (#10): segments and profiles that already exist
+          the banner shows its version. Commands and parameters are the
+          same. Help: credentials are in creds\ next to the scripts (since
+          #3), not in the user profile.
+
+    v2.7.0  2026-11-26  Paul van Dieen
+        - Scale and safety (#10): segments and profiles that already exist
           on the target are listed and skipped (a PATCH merged into them
           without a word); -UpdateExisting PATCHes them anyway. Failed
-          binding maps count as errors and get their own summary line.
-          Error list shows NSX's error_message (was empty). Exit codes 0 /
-          1 / 2. Running count [n/total] per segment, per-object detail
-          moved to -Verbose. Tier-1 remap replaces only the Tier-1 part of
-          the path, literally. Get-AllPages no longer grows an array with +=.
+          binding maps count as errors and get their own summary line. Error
+          list shows NSX's error_message (was empty). Exit codes 0 / 1 / 2.
+          Running count [n/total] per segment, per-object detail moved to
+          -Verbose. Tier-1 remap replaces only the Tier-1 part of the path,
+          literally. Get-AllPages no longer grows an array with +=.
           -SegmentFilter as on Export and Remove. Segment picker as in
-          VIFolderManager/VITagManager: filter on the whole line (wildcard or
-          /text: /VLAN, /T1:<name>, /TZ:<name>), 'reset', 'list', 'all',
+          VIFolderManager/VITagManager: filter on the whole line (wildcard
+          or /text: /VLAN, /T1:<name>, /TZ:<name>), 'reset', 'list', 'all',
           'cancel'; long lists are shortened.
-    2.6 - Get-Help shows the full help again: blank line between
-          #Requires and the help block (without it Get-Help ignored
-          the whole help block).
-    2.5 - Overlay validation runs for every overlay transport zone type
+
+    v2.6.0  2026-11-18  Paul van Dieen
+        - Get-Help shows the full help again: blank line between #Requires
+          and the help block (without it Get-Help ignored the whole help
+          block).
+
+    v2.5.0  2026-11-16  Paul van Dieen
+        - Overlay validation runs for every overlay transport zone type
           (OVERLAY_BACKED, OVERLAY_STANDARD, OVERLAY_ENS); it was skipped
-          for OVERLAY_STANDARD, the type of NSX 4's default overlay zone (#5).
-    2.4 - Prompts without console input stop with a clear message instead
-          of failing on .Trim() of $null. Credentials are saved in
+          for OVERLAY_STANDARD, the type of NSX 4's default overlay zone
+          (#5).
+
+    v2.4.0  2026-11-16  Paul van Dieen
+        - Prompts without console input stop with a clear message instead of
+          failing on .Trim() of $null. Credentials are saved in
           creds\<manager>.cred next to the script; the old file in the user
           profile is still read. -WhatIf lists the binding maps it would
           write and ends with a dry-run summary (#3).
-    2.3 - Added -Disconnected: imports the selected segments without a
+
+    v2.3.0  2026-11-16  Paul van Dieen
+        - Added -Disconnected: imports the selected segments without a
           gateway connection (connectivity_path removed, subnets kept),
           skips the overlay gateway/subnet prompts, and ends with a list of
           the gateway to connect each segment to at the cutover. Replaces
           editing the export JSON by hand (#1).
-    2.2 - Added built-in credential save/reset via Resolve-Credential.
-          Replaced Get-Credential with Read-Host to fix null credential errors
-          in non-interactive PowerShell hosts under Set-StrictMode.
+
+    v2.2.0  2026-03-18  Paul van Dieen
+        - Added built-in credential save/reset via Resolve-Credential.
+          Replaced Get-Credential with Read-Host to fix null credential
+          errors in non-interactive PowerShell hosts under Set-StrictMode.
           Added $ScriptMeta branding banner (Name, Author, Blog, Date).
-    2.1 - Added interactive transport zone selection menu after connecting.
+
+    v2.1.0  2026-03-18  Paul van Dieen
+        - Added interactive transport zone selection menu after connecting.
           Added overlay segment validation: prompts for missing gateway and
           subnet before import begins when OVERLAY_BACKED TZ is selected.
           Added Get-AvailableGateways and Confirm-OverlaySegmentConfig.
-    2.0 - Full rewrite. Clean comments, consistent style.
-          Profile binding maps imported via typed child paths.
-          NSX 4.x and 9.x profile path formats handled automatically.
-          Profile path remap table ensures binding maps reference correct paths.
-          Cursor-based pagination via Get-AllPages.
-    1.x - Initial versions. Interactive segment selection. CSV name-mapping.
+
+    v2.0.0  2026-03-18  Paul van Dieen
+        - Full rewrite. Clean comments, consistent style. Profile binding
+          maps imported via typed child paths. NSX 4.x and 9.x profile path
+          formats handled automatically. Profile path remap table ensures
+          binding maps reference correct paths. Cursor-based pagination via
+          Get-AllPages.
+
+    v1.x  before 2026-03-18  Paul van Dieen
+        - Initial versions. Interactive segment selection. CSV name-mapping.
           WhatIf support. Transport zone override via -TransportZoneId.
 #>
 
@@ -318,14 +360,15 @@ if (-not (Test-Path -LiteralPath $commonPath)) {
     exit 1
 }
 . $commonPath
-if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.2') {
-    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.2. Copy the whole folder of this release." -ForegroundColor Red
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.3.0') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.3.0. Copy the whole folder of this release." -ForegroundColor Red
     exit 1
 }
 
 # A fatal error as one clear line instead of a PowerShell error record
 # pointing into NSXSM-Common.ps1; exit code 1 as before
-trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+# Exit codes as in the vCenter toolkits (#24): 2 when a prompt had no console input, 1 otherwise
+trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; if ($_.Exception.Message -like 'No console input*') { exit 2 }; exit 1 }
 
 # =============================================================================
 #  HELPER FUNCTIONS
@@ -805,11 +848,15 @@ function Confirm-OverlaySegmentConfig {
 #  SCRIPT METADATA
 # =============================================================================
 
+$scriptVersion = '3.3.0'
+$scriptAuthor  = 'Paul van Dieen'
+$scriptBlogUrl = 'https://www.hollebollevsan.nl'
+
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "3.2"
-    Author  = "Paul van Dieen"
-    Blog    = "https://www.hollebollevsan.nl"
+    Version = $scriptVersion
+    Author  = $scriptAuthor
+    Blog    = $scriptBlogUrl
     Date    = "2026-11-27"
 }
 
@@ -1384,6 +1431,7 @@ if ($errList.Count -gt 0) {
     }
 }
 
-# Exit codes (#10): 0 success (or dry run), 1 fatal error (thrown), 2 finished with errors
-if ($totalErrors -gt 0) { exit 2 }
+# Exit codes (#24, as in the vCenter toolkits): 0 success (or dry run), 1 something
+# failed (thrown, or a profile/segment/binding map failed), 2 no console input (trap)
+if ($totalErrors -gt 0) { exit 1 }
 exit 0
