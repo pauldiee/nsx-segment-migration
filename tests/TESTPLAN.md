@@ -94,6 +94,7 @@ Not rerun for #11: the scale set (S0 to S3) and the NB cases; the moved code is 
 | S1 | NB | Export of the 500 `NSXSM-S-*` segments, search API and `-NoSearch` | **pass**: 0:02 and 1:52; segments, profiles, CSV and the 150 binding maps (segment, type, profile paths) identical |
 | S2 | NB | Import into NB itself as `NSXSM-C-*`, `-Disconnected`: `-WhatIf`, real, again | **pass**: dry run 0:03 (500 segments and 150 bindings would be written, 5 profiles on target); real 1:08, 500 / 150 OK, closing line "Imported 500 segment(s) ...; 5 profile(s) already on the target"; again 0:03, "Nothing imported: 500 segment(s) and 5 profile(s) ..." |
 | S3 | NB | Remove of the 500 `NSXSM-C-*` segments | **pass**: 1:06, 500 OK, none left |
+| X2 | N4 to NB | `VLAN199` imported with Enter at the transport zone prompt ("Keeping transport zone from export"), then removed | **pass, with a finding**: the import succeeds, because NSX's own `nsx-vlan-transportzone` (and `nsx-overlay-transportzone`) have the same id on N4 and NB; the segment lands in NB's default zone, not in `overlay-vds01-mgmt-01a` / the zone VCF attached the hosts to. README and docs/31 3.4 now say: always pick the zone into another NSX |
 
 P1/P2 rerun on 2026-11-27 (see the `-Confirm` and ports table). The dummy VM `NSXSM-T-Dummy` (1 vCPU, 128 MB, 16 MB thin disk, guest `otherGuest64`, no OS) was made with PowerCLI on the lab vCenter and deleted after the test.
 
