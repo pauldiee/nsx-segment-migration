@@ -18,20 +18,29 @@
         ($PickerListMax, $script:PickerCancelled, $script:TzNames)
       - Prompts and credentials: Read-Answer, Resolve-Credential,
         Read-NSXCredential, Get-/Save-/Remove-SavedCredential and the
-        credential paths (creds\<manager>.cred next to the scripts)
+        credential paths (<manager>.cred next to the scripts)
 
     The functions read the calling script's $NSXManager, $SkipCertCheck and
     $script:Headers, exactly as they did when each script carried its own
     copy.
 
 .NOTES
-    Version : 1.1
+    Version : 1.2
     Author  : Paul van Dieen
     Blog    : https://www.hollebollevsan.nl
     GitHub  : https://github.com/pauldiee/nsx-segment-migration
 
     Changelog
     ---------
+    1.2 - Interactive start and layout: Read-NSXManager (saved managers as
+          numbers, or a name), Select-ExportFile (exports in the current and
+          script folder with source, date and counts), Test-NSXConnection
+          (offers to go on without the certificate check when it is not
+          trusted), Write-Box (summary boxes that fit their content),
+          Test-InteractiveInput. Credentials are saved as <manager>.cred
+          next to the scripts, as in the vCenter toolkits; creds\ (1.0/1.1)
+          and the user profile are still read. Without a console, the
+          password prompt stops with a message instead of waiting forever.
     1.1 - Invoke-NSXApi: a call that gets no HTTP answer (untrusted
           certificate, DNS, refused connection) showed "The property
           'Response' cannot be found on this object" instead of the real
@@ -49,7 +58,7 @@ Set-StrictMode -Version Latest
 
 # Read by the scripts: they stop when this file is older than they need,
 # and show it in their banner.
-$NSXSMCommonVersion = '1.1'
+$NSXSMCommonVersion = '1.2'
 
 # =============================================================================
 #  REST
@@ -346,7 +355,15 @@ function Read-Answer {
 }
 
 function Get-CredentialPath {
-    # creds\<manager>.cred next to the script, like the other tools (#3).
+    # <manager>.cred next to the scripts, as in the vCenter toolkits
+    # (VIRoleManager, VITagManager, ...). Up to Common 1.1 it was creds\.
+    param([string]$Manager)
+    $safe = $Manager -replace '[^a-zA-Z0-9.\-]', '_'
+    return Join-Path $PSScriptRoot "$safe.cred"
+}
+
+function Get-OldCredentialPath {
+    # Where Common 1.0/1.1 (and the scripts from #3) saved it: creds\.
     param([string]$Manager)
     $safe = $Manager -replace '[^a-zA-Z0-9.\-]', '_'
     return Join-Path (Join-Path $PSScriptRoot 'creds') "$safe.cred"
@@ -360,16 +377,17 @@ function Get-LegacyCredentialPath {
 }
 
 function Get-SavedCredential {
-    # Loads a saved credential for the given NSX Manager: creds\<manager>.cred
-    # next to the script, or the old file in the user profile if only that
-    # one exists. Returns the PSCredential, or $null if there is none.
+    # Loads a saved credential for the given NSX Manager: <manager>.cred
+    # next to the scripts, else the older places (creds\, then the user
+    # profile). Returns the PSCredential, or $null if there is none.
     param([string]$Manager)
-    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
-        if (Test-Path $path) {
+    $current = Get-CredentialPath -Manager $Manager
+    foreach ($path in $current, (Get-OldCredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
+        if (Test-Path -LiteralPath $path) {
             try {
                 $cred = Import-Clixml -Path $path
-                if ($path -eq (Get-LegacyCredentialPath -Manager $Manager)) {
-                    Write-Host "      Using the old credential file $path; choose [2] to save it in creds\ next to the script." -ForegroundColor Gray
+                if ($path -ne $current) {
+                    Write-Host "      Using the old credential file $path; choose [2] to save it next to the scripts." -ForegroundColor Gray
                 }
                 return $cred
             } catch { }
@@ -379,13 +397,11 @@ function Get-SavedCredential {
 }
 
 function Save-Credential {
-    # Saves a credential to creds\<manager>.cred next to the script. On
+    # Saves a credential to <manager>.cred next to the scripts. On
     # Windows Export-Clixml encrypts the password with DPAPI (only this user
     # on this machine can read it); on Linux and macOS it is NOT encrypted.
     param([System.Management.Automation.PSCredential]$Cred, [string]$Manager)
     $path = Get-CredentialPath -Manager $Manager
-    $dir  = Split-Path $path -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $Cred | Export-Clixml -Path $path
     Write-Host "      Credential saved to: $path" -ForegroundColor Gray
     $onWindows = if (Test-Path Variable:IsWindows) { $IsWindows } else { $true }
@@ -397,8 +413,8 @@ function Save-Credential {
 function Remove-SavedCredential {
     # Deletes the saved credential file(s) for the given NSX Manager.
     param([string]$Manager)
-    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
-        if (Test-Path $path) {
+    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-OldCredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
+        if (Test-Path -LiteralPath $path) {
             Remove-Item -Path $path -Force
             Write-Host "      Saved credential removed: $path" -ForegroundColor Gray
         }
@@ -463,7 +479,159 @@ function Read-NSXCredential {
     # Read-Host is used instead of Get-Credential because Get-Credential
     # can return null in some PowerShell hosts and execution contexts.
     $user = Read-Answer "  NSX username"
+    # Read-Host -AsSecureString reads the console, not a redirected stdin:
+    # without a console it would wait forever (1.2)
+    if (-not (Test-InteractiveInput)) { throw "The NSX password can only be typed in an interactive PowerShell window. Run the script there once and save the credential, or pass -Credential." }
     $pass = Read-Host "  NSX password" -AsSecureString
     if ($null -eq $pass) { throw "No console input for the NSX password. Run the script interactively or pass -Credential." }
     return [System.Management.Automation.PSCredential]::new($user, $pass)
+}
+
+# =============================================================================
+#  INTERACTIVE START AND LAYOUT (1.2)
+# =============================================================================
+
+function Test-InteractiveInput {
+    # True when a person can answer a prompt (not a redirected stdin, a
+    # pipeline or a scheduled task). Optional prompts are only asked then.
+    try { return (-not [Console]::IsInputRedirected) } catch { return $false }
+}
+
+function Read-NSXManager {
+    # Asks for the NSX Manager when -NSXManager is not given: the managers
+    # with a saved credential (*.cred next to the scripts, and the older
+    # creds\ folder; file names only) as numbers, or a name typed in.
+    # Returns the name, or $null on cancel.
+    param([string]$Role = 'NSX Manager')
+    $saved = @(@($PSScriptRoot, (Join-Path $PSScriptRoot 'creds')) |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter '*.cred' -File } |
+        Sort-Object LastWriteTime -Descending | ForEach-Object { $_.BaseName } | Select-Object -Unique)
+    Write-Host ''
+    Write-Host "  $Role" -ForegroundColor Yellow
+    if ($saved.Count -gt 0) {
+        Write-Host '  Saved credential for:' -ForegroundColor DarkGray
+        Write-PickerList -Lines $saved -Full
+        Write-Host "  Type a number, or the FQDN or IP of another NSX Manager; 'cancel' stops." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Type the FQDN or IP of the NSX Manager; 'cancel' stops." -ForegroundColor DarkGray
+    }
+    Write-Host ''
+    while ($true) {
+        $raw = Read-Answer '  NSX Manager'
+        if (-not $raw) { continue }
+        if (Test-CancelInput -Text $raw) { return $null }
+        if ($raw -match '^\d+$' -and $saved.Count -gt 0) {
+            $n = [int]$raw
+            if ($n -ge 1 -and $n -le $saved.Count) { Write-Host "  Using $($saved[$n - 1])" -ForegroundColor Green; return $saved[$n - 1] }
+            Write-Host "  Enter a number between 1 and $($saved.Count), or a name" -ForegroundColor Red
+            continue
+        }
+        $name = ($raw -replace '^https?://', '' -replace '/+$', '')
+        if ($name -match '\s') { Write-Host '  A name or IP has no spaces' -ForegroundColor Red; continue }
+        return $name
+    }
+}
+
+function Select-ExportFile {
+    # Asks for the export when Import runs without -InputPath: the exports
+    # (JSON from Export-NSXSegments.ps1) in the current folder and the
+    # script folder, newest first, with their source, date and counts; or a
+    # path typed in. Returns the full path, or $null on cancel.
+    $dirs  = @((Get-Location).Path, $PSScriptRoot) | Select-Object -Unique
+    $files = @($dirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter '*.json' -File -ErrorAction SilentlyContinue } |
+        Sort-Object LastWriteTime -Descending | Group-Object FullName | ForEach-Object { $_.Group[0] })
+    $items = [System.Collections.Generic.List[object]]::new()
+    foreach ($f in $files) {
+        if ($items.Count -ge 20) { break }
+        try { $j = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch { continue }
+        if (-not ($j.PSObject.Properties['segments'] -and $j.PSObject.Properties['source_manager'])) { continue }
+        $prof = if ($j.PSObject.Properties['segment_profiles']) { @($j.segment_profiles).Count } else { 0 }
+        $line = '{0}  [from {1}, {2} segment(s), {3} profile(s), {4:dd-MM-yyyy HH:mm}]' -f $f.Name, $j.source_manager, @($j.segments).Count, $prof, $f.LastWriteTime
+        $items.Add([pscustomobject]@{ Path = $f.FullName; Line = $line })
+    }
+    Write-Host ''
+    Write-Host '  EXPORT TO IMPORT' -ForegroundColor Yellow
+    if ($items.Count -gt 0) {
+        Write-Host "  Exports in $($dirs -join ' and '):" -ForegroundColor DarkGray
+        Write-PickerList -Lines @($items | ForEach-Object { $_.Line }) -Full
+        Write-Host "  Type a number, or the path of an export .json; 'cancel' stops." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  No exports from Export-NSXSegments.ps1 in $($dirs -join ' or ')." -ForegroundColor DarkGray
+        Write-Host "  Type the path of an export .json; 'cancel' stops." -ForegroundColor DarkGray
+    }
+    Write-Host ''
+    while ($true) {
+        $raw = Read-Answer '  Export'
+        if (-not $raw) { continue }
+        if (Test-CancelInput -Text $raw) { return $null }
+        if ($raw -match '^\d+$' -and $items.Count -gt 0) {
+            $n = [int]$raw
+            if ($n -ge 1 -and $n -le $items.Count) { return $items[$n - 1].Path }
+            Write-Host "  Enter a number between 1 and $($items.Count), or a path" -ForegroundColor Red
+            continue
+        }
+        $path = $raw.Trim('"', "'")
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return (Resolve-Path -LiteralPath $path).Path }
+        Write-Host "  File not found: $path" -ForegroundColor Red
+    }
+}
+
+function Test-NSXConnection {
+    # Reads the NSX version. When the certificate is not trusted and
+    # -SkipCertCheck was not given, asks whether to go on without checking
+    # it for this run; without an answer (or No) it throws the real error.
+    try {
+        return (Invoke-NSXApi -Path '/api/v1/node/version')
+    } catch {
+        $err = "$_"
+        if (-not $SkipCertCheck -and $err -match 'not trusted') {
+            Write-Host "      The certificate of $NSXManager is not trusted (self-signed, or its CA is not imported on this machine)." -ForegroundColor Yellow
+            # No one to answer (scheduled task, closed stdin): the real error, not "no console input"
+            $a = try { Read-Answer '      Continue without checking the certificate for this run? (y/N)' } catch { '' }
+            if ($a -match '^(y|yes|j|ja)$') {
+                $script:SkipCertCheck = [switch]$true
+                if ($PSVersionTable.PSVersion.Major -lt 6) { Set-TlsSkipCert }
+                Write-Host '      Certificate check off for this run. Next time add -SkipCertCheck.' -ForegroundColor Gray
+                return (Invoke-NSXApi -Path '/api/v1/node/version')
+            }
+        }
+        throw
+    }
+}
+
+function Format-BoxValue {
+    # Shortens a value to $Max characters, keeping the end (a file name).
+    param([string]$Text, [int]$Max)
+    if ($Text.Length -le $Max) { return $Text }
+    if ($Max -le 3) { return $Text.Substring(0, $Max) }
+    return '...' + $Text.Substring($Text.Length - ($Max - 3))
+}
+
+function Write-Box {
+    # A summary box that fits its content: title, then one row per
+    # label/value pair (an ordered dictionary). The box grows with the
+    # longest value up to the console width; longer values keep their end.
+    param([string]$Title, [System.Collections.IDictionary]$Rows, [string]$Color = 'Green', [int]$MinWidth = 50)
+    $labelW = 0; $valueW = 0
+    foreach ($k in $Rows.Keys) {
+        if ("$k".Length -gt $labelW) { $labelW = "$k".Length }
+        if ("$($Rows[$k])".Length -gt $valueW) { $valueW = "$($Rows[$k])".Length }
+    }
+    $maxInner = 116
+    try { if ([Console]::WindowWidth -gt 20) { $maxInner = [Console]::WindowWidth - 3 } } catch { }
+    $inner  = [Math]::Max($MinWidth, [Math]::Max($Title.Length + 6, $labelW + $valueW + 7))
+    $inner  = [Math]::Min($inner, [Math]::Max($MinWidth, $maxInner))
+    $valMax = [Math]::Max(5, $inner - $labelW - 7)
+    $edge   = '+' + ('=' * $inner) + '+'
+    $lines  = [System.Collections.Generic.List[string]]::new()
+    $lines.Add(''); $lines.Add($edge)
+    $lines.Add('|   ' + $Title.PadRight($inner - 3) + '|')
+    $lines.Add($edge)
+    foreach ($k in $Rows.Keys) {
+        $v = Format-BoxValue -Text "$($Rows[$k])" -Max $valMax
+        $lines.Add('|  ' + ("$k".PadRight($labelW) + ' : ' + $v).PadRight($inner - 3) + ' |')
+    }
+    $lines.Add($edge)
+    foreach ($l in $lines) { Write-Host $l -ForegroundColor $Color }
 }

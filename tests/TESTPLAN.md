@@ -114,6 +114,19 @@ Still open: F3 into NA (NSX 9.1.1) and the retry after a lagging search index.
 
 Not tested: an export with a custom zone whose id doesn't exist on the target (the landing line then says "no zone with this id on the target"; what NSX does with such a segment is not tried). Not run without `-WhatIf`: the change is in the menu and the summary, the write path is unchanged.
 
+**Export 2.6 / Import 3.1 / Remove 1.8 / Common 1.2 (#20), 2026-11-27:** interactive start and tidier output. Answers from stdin.
+
+| # | Lab | Steps | Result |
+|---|---|---|---|
+| U1 | N4 export to NB | Import without parameters, from a folder with eight N4 exports: export `1`, manager typed, segment `1`, no saved credential | **pass**: list "EXPORT TO IMPORT" with each export's source, segments, profiles and date, newest first; "TARGET NSX MANAGER (import into)"; at the password (stdin redirected) "The NSX password can only be typed in an interactive PowerShell window ...", exit 1 (1.1 waited forever there) |
+| U2 | – | Import without parameters, `cancel` at the export list | **pass**: "Nothing imported.", exit 0 |
+| U3 | – | Export without parameters, `q` at the manager prompt | **pass**: "SOURCE NSX MANAGER (export from)", "Nothing exported.", exit 0 |
+| U4 | N4 | Export without `-SkipCertCheck`, a dummy credential: `y`, `n`, Enter, closed stdin at the certificate question | **pass**: `y` "Certificate check off for this run" and goes on (HTTP 403 for the dummy login, as expected); `n`, Enter and closed stdin: one red line "ERROR: HTTP N/A: ... UntrustedRoot -- the certificate of the NSX Manager is not trusted ...", exit 1 |
+| U5 | – | `Save-Credential` / `Get-SavedCredential` / `Remove-SavedCredential` for a made-up manager | **pass**: `<manager>.cred` next to the scripts, read back, removed |
+| U6 | – | `Write-Box` with long paths, a short box and a 300-character value | **pass**: the box grows with the content, borders aligned; the long value keeps its end (`...END.json`) |
+| U7 | – | Import with a missing `-InputPath` file | **pass**: "ERROR: Input file not found: ...", exit 1 |
+| U8 | N4 to NB | Full dry run without parameters, with a saved credential (manager picked by number), then Export and Remove without parameters | **open**: the saved credentials were removed on 2026-11-27; needs one interactive run per manager to save them again |
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on
