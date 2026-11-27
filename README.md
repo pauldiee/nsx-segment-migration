@@ -9,6 +9,15 @@ By Paul van Dieen
 
 ---
 
+## Step-by-step guide
+
+nsx-segment-migration carries NSX segments and segment profiles over in a side-by-side migration to VCF 9, for the networks that HCX doesn't extend. The guide on docs.hollebollevsan.nl walks through it in simple steps, with a check per step:
+
+- [Carrying over the networks and the firewall, step 3: NSX segments and segment profiles](https://docs.hollebollevsan.nl/docs/31-carry-over-networks-and-firewall/#step-3-nsx-segments-and-segment-profiles): prepare the jump host, export, fill in the CSV, plan the import runs (one transport zone per run), dry run, import, check the target, and undo.
+- [Side-by-side migration: build new, then move the workloads](https://docs.hollebollevsan.nl/docs/29-side-by-side-migration/#toolkits): the whole route, and how this toolkit fits with the others.
+
+---
+
 ## Scripts
 
 | Script | Purpose |
@@ -216,6 +225,8 @@ To read the exit code from another process (a scheduled task, a pipeline), start
 ### Transport zone selection
 
 After connecting, an interactive menu lists all transport zones on the target NSX. Select one to apply it to all imported segments, or press Enter to keep the transport zone from the export file. Supply `-TransportZoneId` on the command line to skip the menu.
+
+**Into another NSX Manager, always pick the transport zone.** Enter keeps the transport zone *id* from the export. NSX's own default zones, `nsx-overlay-transportzone` and `nsx-vlan-transportzone`, had the same id on both lab NSX Managers (4.2.4.1 and 9.0.2, 2026-11-27), so the import succeeds, but the segments land in the target's default zone. The hosts of a VCF domain are attached to the zone VCF created (in the lab `overlay-vds01-mgmt-01a`), so those segments are not on the hosts. Because one zone applies to the whole run, import overlay and VLAN segments in separate runs.
 
 ### Overlay segment validation
 
