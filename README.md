@@ -88,7 +88,7 @@ Open the CSV in Excel or any text editor. Fill in the `NewName` column for any o
 |------|----------|--------------|
 | `Segment` | Segment display_name and id | You want a different name on the target |
 | `SegmentProfile` | Profile name; binding paths update automatically | Profile should be renamed |
-| `T1Gateway` | T1 gateway id in connectivity_path | Target NSX has a different gateway id |
+| `T1Gateway` | T1 gateway in connectivity_path | The segment should connect to another Tier-1 on the target: its id, or its name (from v3.2; used when exactly one Tier-1 on the target has that name). VCF gives its Tier-1s a UUID as id, so the name is easier |
 
 ### 3. Dry run on target NSX
 
@@ -243,6 +243,19 @@ After connecting, an interactive menu lists all transport zones on the target NS
 
 From v3.0 the import guards against this. When the export's `source_manager` differs from `-NSXManager`, the menu says *Export is from another NSX Manager: pick one*, and Enter no longer keeps the source zone: it shows where the selected segments would land (the zone with the same id on the target, or *no zone with this id on the target*) and the menu again. Type a number, or `KEEP` if keeping the zone is what you want. Into the same manager (a re-import, a rollback) Enter works as before. The managers are compared by name, so an export made with the IP address and an import with the FQDN of the same manager also gets the question; answer `KEEP`. With `-KeepSourceTransportZone` the log shows the same landing lines and the import goes on.
 
+### Gateway check
+
+From v3.2, unless `-Disconnected`, the import looks up every selected segment's gateway on the target before it writes anything, after the CSV's Tier-1 mapping. Before, NSX refused such a segment with *"HTTP 404: The requested object : /infra/tier-1s/... could not be found"*, after the profiles were already written. When a gateway is missing, the script asks once per gateway, for all segments that use it:
+
+| Answer | Result |
+|---|---|
+| A number | That gateway of the target (the list shows its Tier-0s and Tier-1s) |
+| `D` | Import without a gateway, subnets kept; the summary lists the gateway to connect at the cutover, as with `-Disconnected` |
+| `S` | Skip those segments; the summary names them |
+| `cancel` | Stop; nothing has been written |
+
+A Tier-1 named in the CSV by its display name instead of its id is found by that name (*"Tier-1 't1-mgmt-a' found by its name on the target"*).
+
 ### Overlay segment validation
 
 When the selected transport zone is an overlay zone (`OVERLAY_BACKED`, `OVERLAY_STANDARD` or `OVERLAY_ENS`), the script checks each segment for the two fields NSX requires:
@@ -375,6 +388,13 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v3.2 — Import
+- Gateway check before anything is written (#22): a segment whose gateway is not on the target no longer fails with HTTP 404 after the profiles were written; the script asks per missing gateway (a target gateway, `D` without a gateway, `S` skip, `cancel`). See Gateway check.
+- A Tier-1 in the CSV may be given by its name; VCF's Tier-1 ids are UUIDs.
+- `[FAIL]` lines are red, without the `WARNING:` prefix; the transport zone line names the zone instead of its id.
+- `tests/New-NSXSMTestSet.ps1` 1.0.2 and `tests/New-NSXSMScaleSet.ps1` 0.1.1 read the credential next to the scripts (they still looked in `creds\` only).
+- Tested on NSX 4.2.4.1 to NSX 9.0.2 (`tests/TESTPLAN.md`, G1 to G8), including one real import onto the target's Tier-1.
 
 ### v2.6 — Export / v3.1 — Import / v1.8 — Remove / v1.2 — NSXSM-Common
 - Interactive start (#20): without `-NSXManager` the scripts ask for it (managers with a saved credential as numbers); Import without `-InputPath` lists the exports nearby to pick from. An untrusted certificate without `-SkipCertCheck`: the script asks whether to go on without the check for this run.

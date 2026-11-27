@@ -66,6 +66,14 @@
     every manager tested, so a kept zone can be the target's default zone,
     which the hosts of a VCF domain don't use. The summary names the zone used.
 
+    Gateway check
+    -------------
+    Unless -Disconnected, every selected segment's gateway (connectivity_path
+    after the CSV's Tier-1 remap) is looked up on the target before anything
+    is written. For a gateway that is not there the script asks once: pick a
+    gateway of the target, import those segments without a gateway (connect
+    them at the cutover; listed in the summary), or skip them.
+
     Overlay segment validation
     --------------------------
     If the selected transport zone is an overlay zone (OVERLAY_BACKED,
@@ -175,7 +183,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 3.1
+    Version : 3.2
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -184,6 +192,15 @@
 
     Changelog
     ---------
+    3.2 - Gateway check before anything is written (#22): each selected
+          segment's gateway (after the CSV's Tier-1 remap) must exist on the
+          target. Per missing gateway the script asks once: a gateway of the
+          target, import without a gateway (subnets kept, listed for the
+          cutover as with -Disconnected), or skip those segments. Before,
+          NSX refused each such segment with HTTP 404 after the profiles
+          were already written. The overlay check shows the target path.
+          Failures are red lines without the WARNING: prefix; the transport
+          zone line names the zone instead of its id.
     3.1 - Interactive start (#20): without -InputPath the script lists the
           exports in the current and the script folder (source manager,
           segments, profiles, date) to pick from; without -NSXManager it
@@ -578,6 +595,105 @@ function Get-AvailableGateways {
     return @($gateways | Sort-Object tier, display_name)
 }
 
+function Get-TargetGatewayPath {
+    # The gateway path a segment gets on the target: its connectivity_path
+    # after the CSV's Tier-1 remap (same rule as the import loop).
+    param([string]$Path)
+    if ($Path -match '/tier-1s/([^/]+)' -and $nameMap['T1Gateway'].ContainsKey($Matches[1])) {
+        return $Path.Replace("/tier-1s/$($Matches[1])", "/tier-1s/$($nameMap['T1Gateway'][$Matches[1]])")
+    }
+    return $Path
+}
+
+function Resolve-TargetGateways {
+    # Pre-flight (3.2): every selected segment's gateway must exist on the
+    # target, after the CSV's Tier-1 remap. NSX refuses a segment whose
+    # gateway is missing (HTTP 404), and before 3.2 that only showed after
+    # the profiles were written. Asks once per missing gateway: a gateway of
+    # the target, import without a gateway (connect at the cutover), or skip
+    # those segments. Returns the segments to import.
+    param([array]$Segments)
+    $withGw = @($Segments | Where-Object { $_.PSObject.Properties['connectivity_path'] -and $_.connectivity_path })
+    if ($withGw.Count -eq 0) { return @($Segments) }
+
+    Write-Host "`n      Checking the gateways of the selected segments on the target ..." -ForegroundColor Cyan
+    $gateways = @(Get-AvailableGateways)
+    $known    = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($g in $gateways) { if ($g.path) { [void]$known.Add($g.path) } }
+
+    $missing = [ordered]@{}
+    foreach ($seg in $withGw) {
+        $tp = Get-TargetGatewayPath -Path $seg.connectivity_path
+        if (-not $known.Contains($tp)) {
+            if (-not $missing.Contains($tp)) { $missing[$tp] = [System.Collections.Generic.List[string]]::new() }
+            $missing[$tp].Add($seg.display_name)
+        }
+    }
+    if ($missing.Count -eq 0) {
+        Write-Host "      All gateways exist on the target ($(@($withGw | ForEach-Object { Get-TargetGatewayPath -Path $_.connectivity_path } | Sort-Object -Unique) -join ', '))" -ForegroundColor Green
+        return @($Segments)
+    }
+
+    $decision = @{}
+    foreach ($tp in $missing.Keys) {
+        # A Tier-1 given by its display name (the CSV asks for the id, but VCF
+        # gives its Tier-1s a UUID as id): exactly one Tier-1 with that name
+        # on the target is used, and said so
+        if ($tp -match '^/infra/tier-1s/([^/]+)$') {
+            $byName = @($gateways | Where-Object { $_.tier -eq 'T1' -and $_.display_name -ceq $Matches[1] })
+            if ($byName.Count -eq 1) {
+                $decision[$tp] = @{ Action = 'gateway'; Path = $byName[0].path }
+                Write-Host "      Tier-1 '$($Matches[1])' found by its name on the target: $($byName[0].path)" -ForegroundColor Green
+                continue
+            }
+        }
+        $names = $missing[$tp]
+        $shown = if ($names.Count -gt 5) { (($names | Select-Object -First 5) -join ', ') + ", ... ($($names.Count) in all)" } else { $names -join ', ' }
+        Write-Host ''
+        Write-Host "  Gateway $tp is not on $NSXManager" -ForegroundColor Yellow
+        Write-Host "  Used by $($names.Count) segment(s): $shown" -ForegroundColor Yellow
+        Write-Host "  (A Tier-1 with another id on the target: put that id in the CSV, T1Gateway row, and run again.)" -ForegroundColor DarkGray
+        Write-Host ''
+        for ($i = 0; $i -lt $gateways.Count; $i++) {
+            $num = ($i + 1).ToString().PadLeft($gateways.Count.ToString().Length)
+            Write-Host ("  [{0}] [{1}] {2}" -f $num, $gateways[$i].tier, $gateways[$i].display_name)
+        }
+        Write-Host '  [D] Import without a gateway (subnets kept; connect it at the cutover)'
+        Write-Host '  [S] Skip these segments'
+        Write-Host "  'cancel' stops; nothing has been written yet."
+        Write-Host ''
+        while ($true) {
+            $raw = Read-Answer '  Choice'
+            if (Test-CancelInput -Text $raw) { Write-Host "  Nothing imported." -ForegroundColor Yellow; exit 0 }
+            if ($raw -match '^[dD]$') { $decision[$tp] = @{ Action = 'disconnect' }; Write-Host '  Without a gateway' -ForegroundColor Green; break }
+            if ($raw -match '^[sS]$') { $decision[$tp] = @{ Action = 'skip' }; Write-Host '  Skipped' -ForegroundColor Yellow; break }
+            if ($raw -match '^\d+$' -and [int]$raw -ge 1 -and [int]$raw -le $gateways.Count) {
+                $g = $gateways[[int]$raw - 1]
+                $decision[$tp] = @{ Action = 'gateway'; Path = $g.path }
+                Write-Host "  Gateway: $($g.display_name)" -ForegroundColor Green
+                break
+            }
+            $range = if ($gateways.Count -gt 0) { "a number between 1 and $($gateways.Count), " } else { '' }
+            Write-Host "  Enter ${range}D, S or cancel" -ForegroundColor Red
+        }
+    }
+
+    $result = [System.Collections.Generic.List[object]]::new()
+    foreach ($seg in $Segments) {
+        $has = $seg.PSObject.Properties['connectivity_path'] -and $seg.connectivity_path
+        $tp  = if ($has) { Get-TargetGatewayPath -Path $seg.connectivity_path } else { '' }
+        if ($has -and $decision.ContainsKey($tp)) {
+            $action = $decision[$tp].Action
+            # (no 'continue' inside a switch: there it only leaves the switch)
+            if ($action -eq 'skip') { $script:SkippedNoGateway.Add($seg.display_name); continue }
+            if ($action -eq 'disconnect') { [void]$script:DisconnectNames.Add($seg.display_name) }
+            if ($action -eq 'gateway') { $seg | Add-Member -MemberType NoteProperty -Name 'connectivity_path' -Value $decision[$tp].Path -Force }
+        }
+        $result.Add($seg)
+    }
+    return @($result)
+}
+
 function Confirm-OverlaySegmentConfig {
     # Validates that each segment has the two fields required by NSX for
     # overlay-backed segments: connectivity_path (gateway) and subnets (IP).
@@ -608,8 +724,10 @@ function Confirm-OverlaySegmentConfig {
 
         # ---- Gateway (connectivity_path) ------------------------------------
         $hasGateway = $s.PSObject.Properties['connectivity_path'] -and $s.connectivity_path
-        if ($hasGateway) {
-            Write-Host "  Gateway : $($s.connectivity_path)" -ForegroundColor Green
+        if ($script:DisconnectNames.Contains($segName)) {
+            Write-Host "  Gateway : none, imported without one (chosen at the gateway check)" -ForegroundColor Green
+        } elseif ($hasGateway) {
+            Write-Host "  Gateway : $(Get-TargetGatewayPath -Path $s.connectivity_path) (on the target)" -ForegroundColor Green
         } else {
             Write-Host "  Gateway : not set" -ForegroundColor Yellow
 
@@ -689,7 +807,7 @@ function Confirm-OverlaySegmentConfig {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "3.1"
+    Version = "3.2"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -880,6 +998,18 @@ Write-Host "      Transport zone type: $($script:SelectedTzType)"
 # fields that NSX requires: a gateway connection and a subnet. Any that are
 # missing trigger an interactive prompt so the operator can supply them before
 # the import begins. VLAN-backed segments skip this step entirely.
+# Gateways must exist on the target (3.2): asked per missing gateway, before
+# anything is written. Not with -Disconnected (no gateway is written then).
+$script:DisconnectNames  = [System.Collections.Generic.HashSet[string]]::new()
+$script:SkippedNoGateway = [System.Collections.Generic.List[string]]::new()
+if (-not $Disconnected) {
+    $selectedSegments = @(Resolve-TargetGateways -Segments $selectedSegments)
+    if ($selectedSegments.Count -eq 0) {
+        Write-Host "`n  Nothing imported: all selected segments were skipped at the gateway check." -ForegroundColor Yellow
+        exit 0
+    }
+}
+
 if ($Disconnected) {
     Write-Host "`n      -Disconnected: segments are imported without a gateway connection;" -ForegroundColor Cyan
     Write-Host "      overlay gateway/subnet check skipped (subnets from the export are kept)." -ForegroundColor Cyan
@@ -999,7 +1129,7 @@ foreach ($profile in $profilesToImport) {
             }
         }
         if (-not $written) {
-            Write-Warning "      [FAIL] $($p.display_name) - could not be written to any API path: $lastProfileError"
+            Write-Host "      [FAIL] $($p.display_name) - could not be written to any API path: $lastProfileError" -ForegroundColor Red
             $errList.Add("Profile '$($profile.display_name)': $lastProfileError")
             $errProfiles++
         }
@@ -1027,7 +1157,7 @@ $declinedSegments = 0
 $declinedBindings = 0
 $segNo         = 0
 $segTotal      = $selectedSegments.Count
-if ($TransportZoneId) { Write-Host "      [TZ] $TransportZoneId applied to every imported segment" }
+if ($TransportZoneId) { Write-Host "      Transport zone for every segment: $($script:TzUsedText)" }
 
 foreach ($segment in $selectedSegments) {
     $segNo++
@@ -1053,7 +1183,7 @@ foreach ($segment in $selectedSegments) {
     # remap, so a renamed Tier-1 shows its target name) for the summary list.
     # Listed only once the segment is written (or would be, in a dry run) (#13).
     $dcEntry = $null
-    if ($Disconnected) {
+    if ($Disconnected -or $script:DisconnectNames.Contains($oldName)) {   # or chosen at the gateway check (3.2)
         $srcGw = ''
         if ($s.PSObject.Properties['connectivity_path'] -and $s.connectivity_path) {
             $srcGw = "$($s.connectivity_path)"
@@ -1108,7 +1238,7 @@ foreach ($segment in $selectedSegments) {
             $okSegments++
             if ($dcEntry) { $disconnectedList.Add($dcEntry) }
         } catch {
-            Write-Warning "      $counter [FAIL] $($s.display_name)$($was): $_"
+            Write-Host "      $counter [FAIL] $($s.display_name)$($was): $_" -ForegroundColor Red
             $errList.Add("Segment '$oldName': $_")
             $errSegments++
             continue   # skip binding maps - no point applying them if the segment failed
@@ -1170,7 +1300,7 @@ foreach ($segment in $selectedSegments) {
                     $okBindings++
                 } catch {
                     # Counted as an error (#10): the segment exists but misses a profile
-                    Write-Warning "        [FAIL] $bmType/$bmId : $_"
+                    Write-Host "        [FAIL] $bmType/$bmId : $_" -ForegroundColor Red
                     $errList.Add("$bmType '$bmOldId' on segment '$oldName': $_")
                     $errBindings++
                 }
@@ -1214,10 +1344,14 @@ if ($dryRun) {
         Write-Host "  Declined at -Confirm, not written: $declinedProfiles profile(s), $declinedSegments segment(s), $declinedBindings binding map(s)" -ForegroundColor Yellow
     }
 }
+if ($script:SkippedNoGateway.Count -gt 0) {
+    Write-Host "  Skipped at the gateway check (gateway not on the target): $($script:SkippedNoGateway -join ', ')" -ForegroundColor Yellow
+}
 
 if ($disconnectedList.Count -gt 0) {
     $verb = if ($dryRun) { 'Would be imported' } else { 'Imported' }
-    Write-Host "`n$verb without a gateway (-Disconnected). Connect these at the cutover;" -ForegroundColor Cyan
+    $why  = if ($Disconnected) { '-Disconnected' } else { 'chosen at the gateway check' }
+    Write-Host "`n$verb without a gateway ($why). Connect these at the cutover;" -ForegroundColor Cyan
     Write-Host "ConnectAtCutover is the source gateway, with Tier-1 names after the CSV remap:" -ForegroundColor Cyan
     $disconnectedList | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 }
@@ -1234,6 +1368,9 @@ if ($errList.Count -gt 0) {
     $leftAsIs = [System.Collections.Generic.List[string]]::new()
     if ($skipSegments + $skipProfiles -gt 0) {
         $leftAsIs.Add("$skipSegments segment(s) and $skipProfiles profile(s) already on the target, left as is (-UpdateExisting PATCHes them)")
+    }
+    if ($script:SkippedNoGateway.Count -gt 0) {
+        $leftAsIs.Add("$($script:SkippedNoGateway.Count) segment(s) skipped at the gateway check")
     }
     if ($declinedProfiles + $declinedSegments + $declinedBindings -gt 0) {
         $leftAsIs.Add("$($declinedProfiles + $declinedSegments + $declinedBindings) object(s) declined at -Confirm")

@@ -41,7 +41,7 @@
 
 .PARAMETER Credential
     NSX admin credential. Defaults to the toolkit's own file:
-    creds\<manager>.cred in the repo root, or the older
+    <manager>.cred in the repo root (Common 1.2), creds\<manager>.cred, or the older
     %USERPROFILE%\.nsx_cred_<manager>.xml.
 
 .PARAMETER SkipCertCheck
@@ -55,7 +55,7 @@
 
 .NOTES
     Script   : New-NSXSMScaleSet.ps1
-    Version  : 0.1.0
+    Version  : 0.1.1
     Author   : Paul van Dieen
     Blog     : https://www.hollebollevsan.nl
     Requires : PowerShell 7.4+ (no PowerCLI needed)
@@ -63,6 +63,10 @@
 #>
 
 <# CHANGELOG
+v0.1.1  2026-11-27  Paul van Dieen
+- Reads the credential from <manager>.cred next to the toolkit scripts
+  (NSXSM-Common 1.2, #20) first, then creds\ and the user profile.
+
     v0.1.0  2026-11-19  Paul van Dieen
         - Initial version: Create and Remove of a large segment set for scale
           tests of the nsx-segment-migration scripts (#8)
@@ -80,7 +84,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$scriptVersion = '0.1.0'
+$scriptVersion = '0.1.1'
 $scriptAuthor  = 'Paul van Dieen'
 $scriptBlogUrl = 'https://www.hollebollevsan.nl'
 $prefix        = 'NSXSM-S-'
@@ -93,6 +97,7 @@ Write-Host ('=' * 62) -ForegroundColor DarkCyan
 
 if (-not $Credential) {
     $candidates = @(
+        (Join-Path (Split-Path $PSScriptRoot -Parent) "$($NSXManager -replace '[^a-zA-Z0-9.\-]', '_').cred"),
         (Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'creds') "$($NSXManager -replace '[^a-zA-Z0-9.\-]', '_').cred"),
         (Join-Path $(if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }) ".nsx_cred_$($NSXManager -replace '[^a-zA-Z0-9]','_').xml")
     )
