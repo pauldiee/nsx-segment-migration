@@ -72,6 +72,29 @@ Not covered yet: the retry after a lagging search index.
 
 Not rerun for #11: the scale set (S0 to S3) and the NB cases; the moved code is the same text as before.
 
+**Closing line and `-Confirm` (#13; Import 2.9, Remove 1.7), 2026-11-27, N4, copies `NSXSM-T-C-GW1/2`:**
+
+| # | Steps | Result |
+|---|---|---|
+| R4 | Import of both copies (profiles already there), then the same import again | **pass**: "Imported 2 segment(s), 0 profile(s) and 3 binding map(s); 0 segment(s) and 5 profile(s) already on the target, left as is"; the second run "Nothing imported: 2 segment(s) and 5 profile(s) already on the target ..." |
+| R5 | Remove `-Confirm`, Yes for GW1, No for GW2 | **pass**: GW1 `[OK]`, GW2 `[DECLINED] ... kept`; "1 of 2 selected object(s) deleted; 1 declined at -Confirm and kept", exit 0 |
+| R6 | Import `-Confirm` with GW1 missing (three binding maps) and GW2 present; No for GW1 | **pass**: GW1 `[DECLINED]`, no questions for its binding maps, no cutover table; "Nothing imported: ...; 1 object(s) declined at -Confirm" |
+| R7 | The same with `-WhatIf`, then `-Confirm` with Yes to all | **pass**: the dry run lists only GW1 under "Would be imported without a gateway"; the real run writes GW1 and its three binding maps, the cutover table holds only GW1, closing line "Imported 1 segment(s) ...; 1 segment(s) and 5 profile(s) already on the target ..." |
+
+`-Confirm` answers came from stdin (`Y`/`N` per question). Set removed afterwards; the base set `NSXSM-T-*` untouched.
+
+**Regression with Export 2.5 / Import 2.9 / Remove 1.7 / Common 1.0, 2026-11-27:**
+
+| # | Lab | Steps | Result |
+|---|---|---|---|
+| X1 | N4 to NB | Cross-manager, instead of F3 while NA is away: the N4 export of `NSXSM-T-*` into NSX 9.0.2, overlay segments with `-Disconnected` into `overlay-vds01-mgmt-01a`, `VLAN199` in a second run into `nsx-vlan-transportzone`; the overlay run again; Remove of the set with its profiles (profile picker filtered on `/NSXSM-T`) | **pass**: 5 profiles on NSX 9's flat paths, 4 segments with Connectivity None, subnets and VLAN kept, all five profiles bound on `Ovl-GW1` (`-Mode Show`); the second run "Imported 1 segment(s) ...; 5 profile(s) already on the target", the rerun "Nothing imported: 3 segment(s) and 5 profile(s) ..."; Remove 4 segments then 5 profiles, NB clean |
+| S0 | NB | Create and Remove of the scale set | **pass**: Create 1:06, Remove 2:57, nothing `NSXSM-*` left |
+| S1 | NB | Export of the 500 `NSXSM-S-*` segments, search API and `-NoSearch` | **pass**: 0:02 and 1:52; segments, profiles, CSV and the 150 binding maps (segment, type, profile paths) identical |
+| S2 | NB | Import into NB itself as `NSXSM-C-*`, `-Disconnected`: `-WhatIf`, real, again | **pass**: dry run 0:03 (500 segments and 150 bindings would be written, 5 profiles on target); real 1:08, 500 / 150 OK, closing line "Imported 500 segment(s) ...; 5 profile(s) already on the target"; again 0:03, "Nothing imported: 500 segment(s) and 5 profile(s) ..." |
+| S3 | NB | Remove of the 500 `NSXSM-C-*` segments | **pass**: 1:06, 500 OK, none left |
+
+Still open: F3 into NA (NSX 9.1.1), the retry after a lagging search index, and the NB port cases P1/P2 with these versions (dummy VM needed).
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on

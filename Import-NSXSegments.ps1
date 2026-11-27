@@ -159,7 +159,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 2.8
+    Version : 2.9
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -168,6 +168,16 @@
 
     Changelog
     ---------
+    2.9 - Closing line from the counts (#13): "Nothing imported: ..." when
+          everything selected was already on the target (or declined), and
+          "Imported n segment(s) ...; m already on the target" when part of
+          it was skipped. "All items imported successfully!" only when
+          everything was written. Under -Confirm, No is reported as
+          [DECLINED] and counted (it was shown as "[WhatIf] Would PATCH"),
+          and a declined segment no longer asks for its binding maps. The
+          -Disconnected cutover list holds only segments that were written
+          (or would be, in a dry run); a declined or failed segment was
+          listed as imported.
     2.8 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
           calls, pickers, prompts and credentials. The script stops with a
           clear message when NSXSM-Common.ps1 is missing or older than 1.0;
@@ -564,7 +574,7 @@ function Confirm-OverlaySegmentConfig {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "2.8"
+    Version = "2.9"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -780,6 +790,7 @@ $okProfiles    = 0
 $errProfiles   = 0
 $wouldProfiles = 0
 $skipProfiles  = 0
+$declinedProfiles = 0
 $errList       = [System.Collections.Generic.List[string]]::new()
 
 foreach ($profile in $profilesToImport) {
@@ -843,9 +854,13 @@ foreach ($profile in $profilesToImport) {
             $errList.Add("Profile '$($profile.display_name)': $lastProfileError")
             $errProfiles++
         }
-    } else {
+    } elseif ($WhatIfPreference) {
         Write-Host "      [WhatIf] Would PATCH profile '$($p.display_name)'"
         $wouldProfiles++
+    } else {
+        # No at -Confirm (#13): not a dry run, so not counted as "would"
+        Write-Host "      [DECLINED] $($p.display_name) - not written" -ForegroundColor Yellow
+        $declinedProfiles++
     }
 }
 
@@ -859,6 +874,8 @@ $skipSegments  = 0
 $okBindings    = 0
 $errBindings   = 0
 $wouldBindings = 0
+$declinedSegments = 0
+$declinedBindings = 0
 $segNo         = 0
 $segTotal      = $selectedSegments.Count
 if ($TransportZoneId) { Write-Host "      [TZ] $TransportZoneId applied to every imported segment" }
@@ -885,6 +902,8 @@ foreach ($segment in $selectedSegments) {
     # -Disconnected: drop the gateway connection, keep the subnets. Remember
     # the gateway to connect at the cutover (source gateway after the CSV T1
     # remap, so a renamed Tier-1 shows its target name) for the summary list.
+    # Listed only once the segment is written (or would be, in a dry run) (#13).
+    $dcEntry = $null
     if ($Disconnected) {
         $srcGw = ''
         if ($s.PSObject.Properties['connectivity_path'] -and $s.connectivity_path) {
@@ -901,11 +920,11 @@ foreach ($segment in $selectedSegments) {
                 if ($_.PSObject.Properties['gateway_address']) { $_.gateway_address }
             }) -join ', '
         }
-        $disconnectedList.Add([PSCustomObject]@{
+        $dcEntry = [PSCustomObject]@{
             Segment = $s.display_name
             ConnectAtCutover = if ($srcGw) { $srcGw } else { '(none)' }
             Subnets = if ($subnetStr) { $subnetStr } else { '(none)' }
-        })
+        }
     }
 
     # Remap T1 gateway reference if the CSV maps this gateway to a different id
@@ -938,15 +957,22 @@ foreach ($segment in $selectedSegments) {
             $null = Invoke-NSXApi -Path $apiPath -Method PATCH -Body $body
             Write-Host "      $counter [OK] $($s.display_name)$was" -ForegroundColor Green
             $okSegments++
+            if ($dcEntry) { $disconnectedList.Add($dcEntry) }
         } catch {
             Write-Warning "      $counter [FAIL] $($s.display_name)$($was): $_"
             $errList.Add("Segment '$oldName': $_")
             $errSegments++
             continue   # skip binding maps - no point applying them if the segment failed
         }
-    } else {
+    } elseif ($WhatIfPreference) {
         Write-Host "      $counter [WhatIf] Would PATCH segment '$($s.display_name)' at $apiPath"
         $wouldSegments++
+        if ($dcEntry) { $disconnectedList.Add($dcEntry) }
+    } else {
+        # No at -Confirm (#13): the segment isn't there, so skip its binding maps
+        Write-Host "      $counter [DECLINED] $($s.display_name) - not written, nor its binding maps" -ForegroundColor Yellow
+        $declinedSegments++
+        continue
     }
 
     # Apply profile binding maps for this segment (in a dry run: list them).
@@ -999,9 +1025,12 @@ foreach ($segment in $selectedSegments) {
                     $errList.Add("$bmType '$bmOldId' on segment '$oldName': $_")
                     $errBindings++
                 }
-            } else {
+            } elseif ($WhatIfPreference) {
                 Write-Host "        [WhatIf] Would PATCH $bmApiPath"
                 $wouldBindings++
+            } else {
+                Write-Host "        [DECLINED] $bmType/$bmId - not written" -ForegroundColor Yellow
+                $declinedBindings++
             }
         }
     } else {
@@ -1040,6 +1069,9 @@ Write-Host @"
 |  Skipped (on target)   : $("$skipProfiles prof. / $skipSegments seg.".PadRight(24))|
 +==================================================+
 "@ -ForegroundColor $statusColor
+if ($declinedProfiles + $declinedSegments + $declinedBindings -gt 0) {
+    Write-Host "  Declined at -Confirm, not written: $declinedProfiles profile(s), $declinedSegments segment(s), $declinedBindings binding map(s)" -ForegroundColor Yellow
+}
 }
 
 if ($disconnectedList.Count -gt 0) {
@@ -1055,7 +1087,23 @@ if ($errList.Count -gt 0) {
 } elseif ($dryRun) {
     Write-Host "Dry run complete. Run again without -WhatIf to import.`n" -ForegroundColor Cyan
 } else {
-    Write-Host "All items imported successfully!`n" -ForegroundColor Green
+    # Closing line from the counts (#13): "successfully" only when everything
+    # selected was written; otherwise say what was left as is and why.
+    $written  = $okProfiles + $okSegments + $okBindings
+    $leftAsIs = [System.Collections.Generic.List[string]]::new()
+    if ($skipSegments + $skipProfiles -gt 0) {
+        $leftAsIs.Add("$skipSegments segment(s) and $skipProfiles profile(s) already on the target, left as is (-UpdateExisting PATCHes them)")
+    }
+    if ($declinedProfiles + $declinedSegments + $declinedBindings -gt 0) {
+        $leftAsIs.Add("$($declinedProfiles + $declinedSegments + $declinedBindings) object(s) declined at -Confirm")
+    }
+    if ($leftAsIs.Count -eq 0) {
+        Write-Host "All items imported successfully!`n" -ForegroundColor Green
+    } elseif ($written -eq 0) {
+        Write-Host "Nothing imported: $($leftAsIs -join '; ').`n" -ForegroundColor Yellow
+    } else {
+        Write-Host "Imported $okSegments segment(s), $okProfiles profile(s) and $okBindings binding map(s); $($leftAsIs -join '; ').`n" -ForegroundColor Green
+    }
 }
 
 # Exit codes (#10): 0 success (or dry run), 1 fatal error (thrown), 2 finished with errors

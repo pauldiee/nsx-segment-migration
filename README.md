@@ -228,7 +228,7 @@ Missing values trigger an interactive prompt before any import begins. VLAN-back
 
 `-Disconnected` imports every selected segment with **Connectivity None**: the script removes `connectivity_path` before the PATCH and keeps the subnets. Use it for overlay subnets that keep their IP addresses in a side-by-side migration without HCX: the old Tier-1 keeps the gateway until the cutover, so the target segment must not advertise the same subnet yet. NSX allows this (*"If a segment is not connected to a gateway, subnet is optional"*) and lets you change the connectivity from None to a Tier-0 or Tier-1 later ([Create an NSX Segment](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/advanced-network-management/administration-guide/segments/add-an-nsx-segment.html)).
 
-The summary ends with a table per segment: `ConnectAtCutover` (the source gateway, with a Tier-1 renamed per the CSV) and the subnets. Select the segments in the menu, so you can import some connected and some disconnected in two runs.
+The summary ends with a table per segment that was written (or would be, with `-WhatIf`): `ConnectAtCutover` (the source gateway, with a Tier-1 renamed per the CSV) and the subnets. Segments already on the target, declined at `-Confirm` or failed are not in it. Select the segments in the menu, so you can import some connected and some disconnected in two runs.
 
 ```powershell
 .\Import-NSXSegments.ps1 -NSXManager nsx-target.corp.local `
@@ -347,6 +347,12 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v2.9 — Import / v1.7 — Remove
+- The closing line follows the counts (#13). Import ends with *"All items imported successfully!"* only when everything selected was written; otherwise *"Nothing imported: ..."* or *"Imported n segment(s) ...; m already on the target, left as is"*. Remove says *"n of m selected object(s) deleted; k declined at -Confirm and kept"* when you answered No. Exit codes are unchanged.
+- Import under `-Confirm`: No is reported as `[DECLINED]` and counted (it showed *"[WhatIf] Would PATCH"*), and a declined segment no longer asks for its binding maps. The `-Disconnected` cutover table lists only segments that were written; a declined or failed segment was listed as imported.
+- Remove under `-Confirm`: a declined segment or profile is reported as `[DECLINED]` and counted under the summary.
+- Tested on NSX 4.2.4.1 (`tests/TESTPLAN.md`, R4 to R7), plus a regression with these versions: NSX 4.2.4.1 to NSX 9.0.2 (X1) and the 500-segment scale runs on NSX 9.0.2 (S0 to S3: export 0:02, import 1:08, remove 1:06). Export stays 2.5.
 
 ### v2.5 — Export / v2.8 — Import / v1.6 — Remove / v1.0 — NSXSM-Common
 - The helpers each script carried as its own copy (about 400 lines per script: credentials, `Invoke-NSXApi` and error text, paging, prompts, the picker, transport zone names) moved to `NSXSM-Common.ps1`, unchanged (#11). A fix now goes in one place. Commands, parameters, prompts and output are the same, apart from one banner line with the Common version.
