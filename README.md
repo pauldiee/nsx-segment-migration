@@ -491,6 +491,12 @@ Scale runs S1 to S3 with 500 segments on NSX 9.0.2 (#10, `tests/TESTPLAN.md`):
 
 ---
 
+## Author
+
+Paul van Dieen – [hollebollevsan.nl](https://www.hollebollevsan.nl)
+
+---
+
 ## License
 
 MIT
