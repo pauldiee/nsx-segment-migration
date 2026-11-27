@@ -46,7 +46,7 @@
     -----------
     On first run you are prompted for username and password, then asked whether
     to save them for future runs. Saved credentials are stored per NSX Manager
-    in creds\<manager>.cred next to the scripts (encrypted with DPAPI on
+    in <manager>.cred next to the scripts (encrypted with DPAPI on
     Windows, not encrypted on Linux and macOS). On
     subsequent runs a menu offers to reuse, overwrite, or ignore the saved
     credential. Pass -Credential to bypass the interactive flow entirely.
@@ -102,14 +102,16 @@
     segment-qos-profile-binding-maps        (QoS)
 
 .PARAMETER NSXManager
-    FQDN or IP address of the target NSX Manager.
+    FQDN or IP address of the target NSX Manager. If omitted, the script asks
+    for it and lists the managers with a saved credential.
 
 .PARAMETER Credential
     PSCredential for the NSX Manager admin account.
     If omitted, the built-in credential manager handles prompting and saving.
 
 .PARAMETER InputPath
-    Path to the .json file produced by Export-NSXSegments.ps1.
+    Path to the .json file produced by Export-NSXSegments.ps1. If omitted,
+    the script lists the exports in the current folder and the script folder.
     The companion .csv is expected at the same path with a .csv extension
     unless -MappingPath is specified.
 
@@ -173,7 +175,7 @@
         -InputPath ./nsx-export_20260101_120000.json -WhatIf
 
 .NOTES
-    Version : 3.0
+    Version : 3.1
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Export-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -182,6 +184,18 @@
 
     Changelog
     ---------
+    3.1 - Interactive start (#20): without -InputPath the script lists the
+          exports in the current and the script folder (source manager,
+          segments, profiles, date) to pick from; without -NSXManager it
+          asks for the target (managers with a saved credential as
+          numbers). The summary boxes fit their content, name the manager
+          and include the transport zone used.
+          The real error as one red ERROR: line instead of a PowerShell
+          error record. An untrusted certificate without -SkipCertCheck:
+          asks whether to go on without the check for this run. Saved
+          credentials as <manager>.cred next to the scripts, as in the
+          vCenter toolkits (creds\ and the profile file are still read).
+          Needs NSXSM-Common.ps1 1.2.
     3.0 - Transport zone from another NSX Manager (#17): when the export's
           source_manager differs from -NSXManager, Enter at the transport
           zone menu no longer keeps the source zone silently. The menu says
@@ -255,12 +269,10 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)]
     [string]$NSXManager,
 
     [System.Management.Automation.PSCredential]$Credential,
 
-    [Parameter(Mandatory)]
     [string]$InputPath,
 
     [string]$MappingPath,
@@ -289,10 +301,14 @@ if (-not (Test-Path -LiteralPath $commonPath)) {
     exit 1
 }
 . $commonPath
-if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.0') {
-    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.0. Copy the whole folder of this release." -ForegroundColor Red
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.2') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.2. Copy the whole folder of this release." -ForegroundColor Red
     exit 1
 }
+
+# A fatal error as one clear line instead of a PowerShell error record
+# pointing into NSXSM-Common.ps1; exit code 1 as before
+trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 
 # =============================================================================
 #  HELPER FUNCTIONS
@@ -673,7 +689,7 @@ function Confirm-OverlaySegmentConfig {
 
 $ScriptMeta = @{
     Name    = "Import-NSXSegments.ps1"
-    Version = "3.0"
+    Version = "3.1"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -696,6 +712,17 @@ Write-Host ""
 
 # -- 1. Load export JSON ------------------------------------------------------
 if ($KeepSourceTransportZone -and $TransportZoneId) { throw 'Use -TransportZoneId or -KeepSourceTransportZone, not both.' }
+
+# No -InputPath / -NSXManager: ask for them (the exports found nearby, the
+# managers with a saved credential)
+if (-not $InputPath) {
+    $InputPath = Select-ExportFile
+    if (-not $InputPath) { Write-Host "  Nothing imported." -ForegroundColor Yellow; exit 0 }
+}
+if (-not $NSXManager) {
+    $NSXManager = Read-NSXManager -Role 'TARGET NSX MANAGER (import into)'
+    if (-not $NSXManager) { Write-Host "  Nothing imported." -ForegroundColor Yellow; exit 0 }
+}
 if (-not (Test-Path $InputPath)) { throw "Input file not found: $InputPath" }
 Write-Host "`n[1/5] Loading export file: $InputPath" -ForegroundColor Cyan
 $exportData = Get-Content $InputPath -Raw | ConvertFrom-Json
@@ -798,7 +825,7 @@ if ($SkipCertCheck -and $PSVersionTable.PSVersion.Major -lt 6) { Set-TlsSkipCert
 $script:Headers = Get-BasicAuthHeader -Cred $Credential
 
 Write-Host "`n[3/5] Verifying connectivity to $NSXManager ..." -ForegroundColor Cyan
-$ver = Invoke-NSXApi -Path '/api/v1/node/version'
+$ver = Test-NSXConnection
 Write-Host "      NSX version : $($ver.product_version)" -ForegroundColor Green
 
 # Determine transport zone id and type.
@@ -1167,36 +1194,26 @@ $statusColor = if ($totalErrors -eq 0) { 'Green' } else { 'Yellow' }
 $dryRun      = [bool]$WhatIfPreference
 
 if ($dryRun) {
-    Write-Host @"
-
-+==================================================+
-|   DRY RUN (-WhatIf): nothing was changed         |
-+==================================================+
-|  Profiles that would be written : $("$wouldProfiles".PadRight(15))|
-|  Segments that would be written : $("$wouldSegments".PadRight(15))|
-|  Bindings that would be written : $("$wouldBindings".PadRight(15))|
-|  Profiles already on target     : $("$skipProfiles".PadRight(15))|
-|  Segments already on target     : $("$skipSegments".PadRight(15))|
-+==================================================+
-"@ -ForegroundColor Cyan
+    Write-Box -Title "DRY RUN (-WhatIf) into $($NSXManager): nothing was changed" -Color Cyan -Rows ([ordered]@{
+        'Profiles that would be written' = $wouldProfiles
+        'Segments that would be written' = $wouldSegments
+        'Bindings that would be written' = $wouldBindings
+        'Profiles already on target'     = $skipProfiles
+        'Segments already on target'     = $skipSegments
+        'Transport zone'                 = $script:TzUsedText
+    })
 } else {
-Write-Host @"
-
-+==================================================+
-|   IMPORT SUMMARY                                 |
-+==================================================+
-|  Profiles  OK / Failed : $("$okProfiles / $errProfiles".PadRight(24))|
-|  Segments  OK / Failed : $("$okSegments / $errSegments".PadRight(24))|
-|  Bindings  OK / Failed : $("$okBindings / $errBindings".PadRight(24))|
-|  Skipped (on target)   : $("$skipProfiles prof. / $skipSegments seg.".PadRight(24))|
-+==================================================+
-"@ -ForegroundColor $statusColor
-if ($declinedProfiles + $declinedSegments + $declinedBindings -gt 0) {
-    Write-Host "  Declined at -Confirm, not written: $declinedProfiles profile(s), $declinedSegments segment(s), $declinedBindings binding map(s)" -ForegroundColor Yellow
+    Write-Box -Title "IMPORT SUMMARY ($NSXManager)" -Color $statusColor -Rows ([ordered]@{
+        'Profiles  OK / Failed' = "$okProfiles / $errProfiles"
+        'Segments  OK / Failed' = "$okSegments / $errSegments"
+        'Bindings  OK / Failed' = "$okBindings / $errBindings"
+        'Skipped (on target)'   = "$skipProfiles profile(s) / $skipSegments segment(s)"
+        'Transport zone'        = $script:TzUsedText
+    })
+    if ($declinedProfiles + $declinedSegments + $declinedBindings -gt 0) {
+        Write-Host "  Declined at -Confirm, not written: $declinedProfiles profile(s), $declinedSegments segment(s), $declinedBindings binding map(s)" -ForegroundColor Yellow
+    }
 }
-}
-
-if ($script:TzUsedText) { Write-Host "  Transport zone: $($script:TzUsedText)" -ForegroundColor Gray }
 
 if ($disconnectedList.Count -gt 0) {
     $verb = if ($dryRun) { 'Would be imported' } else { 'Imported' }

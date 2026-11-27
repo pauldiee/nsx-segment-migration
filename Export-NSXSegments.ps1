@@ -21,7 +21,7 @@
     -----------
     On first run you are prompted for username and password, then asked whether
     to save them for future runs. Saved credentials are stored per NSX Manager
-    in creds\<manager>.cred next to the scripts (encrypted with DPAPI on
+    in <manager>.cred next to the scripts (encrypted with DPAPI on
     Windows, not encrypted on Linux and macOS). On
     subsequent runs a menu offers to reuse, overwrite, or ignore the saved
     credential. Pass -Credential to bypass the interactive flow entirely.
@@ -39,7 +39,8 @@
     segment-qos-profile-binding-maps        (QoS)
 
 .PARAMETER NSXManager
-    FQDN or IP address of the source NSX Manager.
+    FQDN or IP address of the source NSX Manager. If omitted, the script asks
+    for it and lists the managers with a saved credential.
 
 .PARAMETER Credential
     PSCredential for the NSX Manager admin account.
@@ -80,7 +81,7 @@
     <OutputBase>.csv   - Name-mapping table; edit NewName column before importing
 
 .NOTES
-    Version : 2.5
+    Version : 2.6
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Pair    : Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -91,6 +92,16 @@
 
     Changelog
     ---------
+    2.6 - Interactive start (#20): without -NSXManager the script asks for
+          it (managers with a saved credential as numbers). The summary box
+          fits its content and shows full paths; then the next command and,
+          on Windows, an offer to open the CSV.
+          The real error as one red ERROR: line instead of a PowerShell
+          error record. An untrusted certificate without -SkipCertCheck:
+          asks whether to go on without the check for this run. Saved
+          credentials as <manager>.cred next to the scripts, as in the
+          vCenter toolkits (creds\ and the profile file are still read).
+          Needs NSXSM-Common.ps1 1.2.
     2.5 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
           calls, pickers, prompts and credentials. The script stops with a
           clear message when NSXSM-Common.ps1 is missing or older than 1.0;
@@ -126,7 +137,6 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
     [string]$NSXManager,
 
     [System.Management.Automation.PSCredential]$Credential,
@@ -151,10 +161,14 @@ if (-not (Test-Path -LiteralPath $commonPath)) {
     exit 1
 }
 . $commonPath
-if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.0') {
-    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.0. Copy the whole folder of this release." -ForegroundColor Red
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.2') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.2. Copy the whole folder of this release." -ForegroundColor Red
     exit 1
 }
+
+# A fatal error as one clear line instead of a PowerShell error record
+# pointing into NSXSM-Common.ps1; exit code 1 as before
+trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 
 # =============================================================================
 #  HELPER FUNCTIONS
@@ -195,7 +209,7 @@ function Select-Segments {
 
 $ScriptMeta = @{
     Name    = "Export-NSXSegments.ps1"
-    Version = "2.5"
+    Version = "2.6"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -216,6 +230,12 @@ Write-Host ("  Common : v{0}" -f $NSXSMCommonVersion) -ForegroundColor DarkGray
 Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
 Write-Host ""
 
+# No -NSXManager: ask for it, with the managers that have a saved credential
+if (-not $NSXManager) {
+    $NSXManager = Read-NSXManager -Role 'SOURCE NSX MANAGER (export from)'
+    if (-not $NSXManager) { Write-Host "  Nothing exported." -ForegroundColor Yellow; exit 0 }
+}
+
 $jsonPath = "$OutputBase.json"
 $csvPath  = "$OutputBase.csv"
 
@@ -225,7 +245,7 @@ $script:Headers = Get-BasicAuthHeader -Cred $Credential
 
 # -- 1. Verify connectivity ---------------------------------------------------
 Write-Host "`n[1/5] Verifying connectivity to $NSXManager ..." -ForegroundColor Cyan
-$ver = Invoke-NSXApi -Path '/api/v1/node/version'
+$ver = Test-NSXConnection
 Write-Host "      NSX version : $($ver.product_version)" -ForegroundColor Green
 
 # -- 2. Fetch segments and interactive selection ------------------------------
@@ -459,24 +479,30 @@ $csvRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
 Write-Host "      Written: $csvPath ($($csvRows.Count) rows)"
 
 # -- Summary ------------------------------------------------------------------
-Write-Host @"
+$jsonFull = (Resolve-Path -LiteralPath $jsonPath).Path
+$csvFull  = (Resolve-Path -LiteralPath $csvPath).Path
+Write-Box -Title 'EXPORT COMPLETE' -Color Green -Rows ([ordered]@{
+    'Exported from'     = $NSXManager
+    'Segments exported' = $segments.Count
+    'Profiles exported' = $customProfiles.Count
+    'Tier-1 gateways'   = $t1Ids.Count
+    'JSON'              = $jsonFull
+    'CSV (edit me!)'    = $csvFull
+})
+Write-Host ''
+Write-Host 'Next steps:' -ForegroundColor Green
+Write-Host '  1. Fill in the NewName column of the CSV (leave NewName = OldName to keep a name):' -ForegroundColor Green
+Write-Host "     $csvFull" -ForegroundColor Gray
+Write-Host '  2. Dry run, then the import. Without -InputPath and -NSXManager it asks for both:' -ForegroundColor Green
+Write-Host "     .\Import-NSXSegments.ps1 -InputPath '$jsonFull' -WhatIf" -ForegroundColor Gray
+Write-Host ''
 
-+==================================================+
-|   EXPORT COMPLETE                                |
-+==================================================+
-|  Segments exported  : $($segments.Count.ToString().PadRight(26))|
-|  Profiles exported  : $($customProfiles.Count.ToString().PadRight(26))|
-|  T1 Gateways found  : $($t1Ids.Count.ToString().PadRight(26))|
-|  JSON               : $($jsonPath.PadRight(26))|
-|  CSV (edit me!)     : $($csvPath.PadRight(26))|
-+==================================================+
-
-Next steps:
-  1. Edit the NewName column in: $csvPath
-     Leave NewName = OldName for objects that should keep their existing name.
-  2. Run:
-     .\Import-NSXSegments.ps1 -NSXManager <target> -InputPath '$jsonPath'
-"@ -ForegroundColor Green
+# Offer to open the CSV (Windows, someone at the keyboard)
+$onWindows = if (Test-Path Variable:IsWindows) { $IsWindows } else { $true }
+if ($onWindows -and (Test-InteractiveInput)) {
+    $open = Read-Answer '  Open the CSV now? (y/N)'
+    if ($open -match '^(y|yes|j|ja)$') { Invoke-Item -LiteralPath $csvFull }
+}
 
 # Exit codes (#10): 0 export written or nothing to export, 1 fatal error (thrown)
 exit 0

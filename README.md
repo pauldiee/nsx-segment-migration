@@ -43,6 +43,14 @@ nsx-segment-migration carries NSX segments and segment profiles over in a side-b
 
 ## Quick Start
 
+**The short way: start a script without parameters.** It asks for everything it needs:
+
+- **NSX Manager:** the managers you saved a credential for are listed as numbers; type a number, or the FQDN or IP of another manager.
+- **Export file (Import):** the exports in the current folder and the script folder, newest first, with their source manager, number of segments and profiles, and date; type a number or a path.
+- **Certificate:** when the NSX Manager's certificate is not trusted and you didn't pass `-SkipCertCheck`, the script asks whether to go on without checking it for this run.
+
+`cancel` (or `q`) at any of these prompts stops without changing anything. The parameters below do the same without the questions, for example in a script of your own.
+
 ### 1. Export from source NSX
 
 ```powershell
@@ -53,6 +61,8 @@ On first run you will be prompted for your username and password, then asked whe
 
 - `nsx-export_<timestamp>.json` — full object data for the importer
 - `nsx-export_<timestamp>.csv` — name-mapping table; edit before importing
+
+The summary shows both files with their full path and the import command for the next step. On Windows the script then offers to open the CSV.
 
 ### Choosing segments (all three scripts)
 
@@ -116,7 +126,7 @@ All three scripts handle credentials the same way:
   NSX username: admin
   NSX password: ********
   Save credential for future runs? (Y/N): Y
-  Credential saved to: C:\Scripts\nsx-segment-migration\creds\nsx-source.corp.local.cred
+  Credential saved to: C:\Scripts\nsx-segment-migration\nsx-source.corp.local.cred
 ```
 
 **Subsequent runs (saved credential found):**
@@ -129,18 +139,20 @@ All three scripts handle credentials the same way:
   Select: 1
 ```
 
-Credentials are saved per NSX Manager in `creds\<manager>.cred` next to the scripts, so source and target environments each have their own file (`creds/` is in `.gitignore`). On Windows the password is encrypted with DPAPI and can only be decrypted by your Windows user account on the same machine; on Linux and macOS `Export-Clixml` does **not** encrypt it, and the scripts say so when they save.
+Credentials are saved per NSX Manager as `<manager>.cred` next to the scripts, like the vCenter toolkits (VIRoleManager, VITagManager, ...), so source and target environments each have their own file (`*.cred` is in `.gitignore`). On Windows the password is encrypted with DPAPI and can only be decrypted by your Windows user account on the same machine; on Linux and macOS `Export-Clixml` does **not** encrypt it, and the scripts say so when they save.
 
-Before v2.2 / v2.4 / v1.3 the file was `%USERPROFILE%\.nsx_cred_<manager>.xml`. The scripts still read that file if there is no `creds\` file yet; choose **[2]** once to save it in the new place.
+Up to NSXSM-Common 1.1 the file was `creds\<manager>.cred`, and before v2.2 / v2.4 / v1.3 `%USERPROFILE%\.nsx_cred_<manager>.xml`. The scripts still read both when there is no file next to the scripts yet; choose **[2]** once to save it in the new place.
 
 To bypass the interactive flow entirely, pass a credential object directly:
 
 ```powershell
-$cred = Import-Clixml .\creds\nsx-source.corp.local.cred
+$cred = Import-Clixml .\nsx-source.corp.local.cred
 .\Export-NSXSegments.ps1 -NSXManager nsx-source.corp.local -Credential $cred -SkipCertCheck
 ```
 
-The scripts need an interactive console for their menus. Without one (input redirected, a scheduled task) a prompt stops the script with *"No console input for the prompt ..."* instead of an unclear error.
+The scripts need an interactive console for their menus. Without one (input redirected, a scheduled task) a prompt stops the script with *"No console input for the prompt ..."* instead of an unclear error, and the password prompt says to run the script once in a PowerShell window or pass `-Credential` (it waited forever before 1.2).
+
+A fatal error (no connection, file not found, an untrusted certificate you didn't accept) ends the script with one red `ERROR: ...` line and exit code 1.
 
 ---
 
@@ -225,7 +237,7 @@ To read the exit code from another process (a scheduled task, a pipeline), start
 
 ### Transport zone selection
 
-After connecting, an interactive menu lists all transport zones on the target NSX. Select one to apply it to all imported segments, or press Enter to keep the transport zone from the export file. Supply `-TransportZoneId` on the command line to skip the menu, or `-KeepSourceTransportZone` to keep the zone from the export without the menu. The summary ends with the transport zone used (`Transport zone: overlay-vds01-mgmt-01a [OVERLAY_BACKED], chosen at the menu`).
+After connecting, an interactive menu lists all transport zones on the target NSX. Select one to apply it to all imported segments, or press Enter to keep the transport zone from the export file. Supply `-TransportZoneId` on the command line to skip the menu, or `-KeepSourceTransportZone` to keep the zone from the export without the menu. The summary box names the transport zone used (`Transport zone : overlay-vds01-mgmt-01a [OVERLAY_BACKED], chosen at the menu`).
 
 **Into another NSX Manager, always pick the transport zone.** Enter keeps the transport zone *id* from the export. NSX's own default zones, `nsx-overlay-transportzone` and `nsx-vlan-transportzone`, had the same id on both lab NSX Managers (4.2.4.1 and 9.0.2, 2026-11-27), so the import succeeds, but the segments land in the target's default zone. The hosts of a VCF domain are attached to the zone VCF created (in the lab `overlay-vds01-mgmt-01a`), so those segments are not on the hosts. Because one zone applies to the whole run, import overlay and VLAN segments in separate runs.
 
@@ -334,7 +346,7 @@ All three scripts try both path formats automatically and use whichever responds
 
 ## Certificate Notes
 
-`-SkipCertCheck` bypasses TLS validation and works for self-signed certificates. Without it, a self-signed certificate stops the script at *Verifying connectivity* with *"the certificate of the NSX Manager is not trusted: pass -SkipCertCheck ..."* (from NSXSM-Common 1.1). If your NSX uses a certificate signed by an internal CA, you may still see validation errors because Windows cannot build a trust chain to the CA root. The fix is to import your CA certificate into the Windows Trusted Root store:
+`-SkipCertCheck` bypasses TLS validation and works for self-signed certificates. Without it, the script asks at *Verifying connectivity* whether to go on without checking the certificate for this run (from NSXSM-Common 1.2); answer No, or run it without a console, and it stops with *"the certificate of the NSX Manager is not trusted: pass -SkipCertCheck ..."* (from NSXSM-Common 1.1). If your NSX uses a certificate signed by an internal CA, you may still see validation errors because Windows cannot build a trust chain to the CA root. The fix is to import your CA certificate into the Windows Trusted Root store:
 
 ```powershell
 Import-Certificate -FilePath "your-internal-ca.cer" `
@@ -363,6 +375,13 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v2.6 — Export / v3.1 — Import / v1.8 — Remove / v1.2 — NSXSM-Common
+- Interactive start (#20): without `-NSXManager` the scripts ask for it (managers with a saved credential as numbers); Import without `-InputPath` lists the exports nearby to pick from. An untrusted certificate without `-SkipCertCheck`: the script asks whether to go on without the check for this run.
+- Tidier output: summary boxes fit their content and name the manager (Import's box includes the transport zone, Export's shows full paths, the next command and offers to open the CSV on Windows); a fatal error is one red `ERROR:` line.
+- Credentials as `<manager>.cred` next to the scripts, as in the vCenter toolkits; `creds\` and the profile file are still read.
+- Without a console the password prompt stops with a message instead of waiting forever.
+- Each script needs NSXSM-Common 1.2.
 
 ### v3.0 — Import / v1.1 — NSXSM-Common
 - Import: a transport zone from another NSX Manager is no longer kept silently (#17). When the export's `source_manager` differs from `-NSXManager`, Enter at the transport zone menu shows where the segments would land and the menu again; type a number or `KEEP`. New switch `-KeepSourceTransportZone`; the summary names the transport zone used. See Transport zone selection.

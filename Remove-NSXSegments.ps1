@@ -33,7 +33,7 @@
     -----------
     On first run you are prompted for username and password, then asked whether
     to save them for future runs. Saved credentials are stored per NSX Manager
-    in creds\<manager>.cred next to the scripts (encrypted with DPAPI on
+    in <manager>.cred next to the scripts (encrypted with DPAPI on
     Windows, not encrypted on Linux and macOS). On
     subsequent runs a menu offers to reuse, overwrite, or ignore the saved
     credential. Pass -Credential to bypass the interactive flow entirely.
@@ -52,7 +52,8 @@
     segment-qos-profile-binding-maps        (QoS)
 
 .PARAMETER NSXManager
-    FQDN or IP address of the NSX Manager.
+    FQDN or IP address of the NSX Manager. If omitted, the script asks
+    for it and lists the managers with a saved credential.
 
 .PARAMETER Credential
     PSCredential for the NSX Manager admin account.
@@ -87,7 +88,7 @@
     .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck -WhatIf
 
 .NOTES
-    Version : 1.7
+    Version : 1.8
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Toolkit : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -99,6 +100,15 @@
 
     Changelog
     ---------
+    1.8 - Interactive start (#20): without -NSXManager the script asks for
+          it (managers with a saved credential as numbers). The summary box
+          fits its content and names the manager.
+          The real error as one red ERROR: line instead of a PowerShell
+          error record. An untrusted certificate without -SkipCertCheck:
+          asks whether to go on without the check for this run. Saved
+          credentials as <manager>.cred next to the scripts, as in the
+          vCenter toolkits (creds\ and the profile file are still read).
+          Needs NSXSM-Common.ps1 1.2.
     1.7 - Closing line from the counts (#13): "n of m selected object(s)
           deleted; k declined at -Confirm and kept" instead of "All selected
           objects deleted successfully" when something was declined. A
@@ -143,7 +153,6 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)]
     [string]$NSXManager,
 
     [System.Management.Automation.PSCredential]$Credential,
@@ -166,10 +175,14 @@ if (-not (Test-Path -LiteralPath $commonPath)) {
     exit 1
 }
 . $commonPath
-if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.0') {
-    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.0. Copy the whole folder of this release." -ForegroundColor Red
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.2') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.2. Copy the whole folder of this release." -ForegroundColor Red
     exit 1
 }
+
+# A fatal error as one clear line instead of a PowerShell error record
+# pointing into NSXSM-Common.ps1; exit code 1 as before
+trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 
 # =============================================================================
 #  HELPER FUNCTIONS
@@ -260,7 +273,7 @@ function Get-BindingMapsForSegment {
 
 $ScriptMeta = @{
     Name    = "Remove-NSXSegments.ps1"
-    Version = "1.7"
+    Version = "1.8"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
     Date    = "2026-11-27"
@@ -281,13 +294,19 @@ Write-Host ("  Common : v{0}" -f $NSXSMCommonVersion) -ForegroundColor DarkGray
 Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
 Write-Host ""
 
+# No -NSXManager: ask for it, with the managers that have a saved credential
+if (-not $NSXManager) {
+    $NSXManager = Read-NSXManager -Role 'NSX MANAGER TO REMOVE SEGMENTS AND PROFILES FROM'
+    if (-not $NSXManager) { Write-Host "  Nothing removed." -ForegroundColor Yellow; exit 0 }
+}
+
 # -- 1. Connect ---------------------------------------------------------------
 $Credential = Resolve-Credential -Supplied $Credential -Manager $NSXManager
 if ($SkipCertCheck -and $PSVersionTable.PSVersion.Major -lt 6) { Set-TlsSkipCert }
 $script:Headers = Get-BasicAuthHeader -Cred $Credential
 
 Write-Host "`n[1/4] Verifying connectivity to $NSXManager ..." -ForegroundColor Cyan
-$ver = Invoke-NSXApi -Path '/api/v1/node/version'
+$ver = Test-NSXConnection
 Write-Host "      NSX version : $($ver.product_version)" -ForegroundColor Green
 
 # -- 2. Fetch and select segments ---------------------------------------------
@@ -601,15 +620,10 @@ foreach ($prof in $profilesToDelete) {
 $totalErrors = $errSegments + $errProfiles
 $statusColor = if ($totalErrors -eq 0) { 'Green' } else { 'Yellow' }
 
-Write-Host @"
-
-+==================================================+
-|   DELETE SUMMARY                                 |
-+==================================================+
-|  Segments  OK / Failed : $("$okSegments / $errSegments".PadRight(24))|
-|  Profiles  OK / Failed : $("$okProfiles / $errProfiles".PadRight(24))|
-+==================================================+
-"@ -ForegroundColor $statusColor
+Write-Box -Title "DELETE SUMMARY ($NSXManager)" -Color $statusColor -Rows ([ordered]@{
+    'Segments  OK / Failed' = "$okSegments / $errSegments"
+    'Profiles  OK / Failed' = "$okProfiles / $errProfiles"
+})
 $declined = $declinedSegments + $declinedProfiles
 if ($declined -gt 0) {
     Write-Host "  Declined at -Confirm, kept: $declinedSegments segment(s), $declinedProfiles profile(s)" -ForegroundColor Yellow
