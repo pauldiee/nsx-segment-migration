@@ -211,6 +211,8 @@ From v2.7 the import first lists the segments and profiles on the target. A PATC
 | 1 | Fatal error (no connection, file not found, ...) |
 | 2 | Finished with errors: a profile, segment or binding map failed; the Errors list shows NSX's own message |
 
+To read the exit code from another process (a scheduled task, a pipeline), start the script with `pwsh -File .\Import-NSXSegments.ps1 ...`. With `pwsh -Command "& .\Import-NSXSegments.ps1 ..."` PowerShell reports 1 for any non-zero code, so 2 turns into 1. The same goes for Export and Remove.
+
 ### Transport zone selection
 
 After connecting, an interactive menu lists all transport zones on the target NSX. Select one to apply it to all imported segments, or press Enter to keep the transport zone from the export file. Supply `-TransportZoneId` on the command line to skip the menu.
@@ -287,7 +289,7 @@ Attached ports and binding maps are read with the NSX search API: one call for t
 
 ### Exit codes
 
-0 done (also: nothing selected, aborted, dry run), 1 fatal error, 2 finished with errors (the Errors list shows NSX's own message).
+0 done (also: nothing selected, aborted, dry run), 1 fatal error, 2 finished with errors (the Errors list shows NSX's own message). Start it with `pwsh -File` to get the code in another process; `pwsh -Command` turns 2 into 1 (see the Import exit codes).
 
 ### Examples
 
