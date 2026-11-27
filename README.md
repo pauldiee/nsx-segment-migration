@@ -16,8 +16,11 @@ By Paul van Dieen
 | `Export-NSXSegments.ps1` | Exports segments, custom profiles, and profile binding maps from a source NSX to a JSON + CSV file pair |
 | `Import-NSXSegments.ps1` | Imports the JSON + CSV pair into a target NSX, with interactive transport zone selection, overlay validation, and name remapping |
 | `Remove-NSXSegments.ps1` | Interactively selects and deletes segments and/or profiles, with a typed confirmation gate |
+| `NSXSM-Common.ps1` | Shared helpers the three scripts load: REST calls, pickers, prompts and credentials. Not run on its own |
 | `tests/New-NSXSMTestSet.ps1` | Builds, shows and removes a throwaway `NSXSM-T-*` test set in a **lab** NSX Manager |
 | `tests/New-NSXSMScaleSet.ps1` | Builds and removes a large `NSXSM-S-*` set (default 500 segments) in a **lab** NSX Manager |
+
+**Keep the scripts and `NSXSM-Common.ps1` together.** Copy the whole folder to the jump host, not one script: each script loads `NSXSM-Common.ps1` from its own folder and stops with a message (exit code 1) when it is missing or older than the script needs. The banner shows the version of both.
 
 ---
 
@@ -344,6 +347,12 @@ Lab results (2026-11-16):
 ---
 
 ## Changelog
+
+### v2.5 — Export / v2.8 — Import / v1.6 — Remove / v1.0 — NSXSM-Common
+- The helpers each script carried as its own copy (about 400 lines per script: credentials, `Invoke-NSXApi` and error text, paging, prompts, the picker, transport zone names) moved to `NSXSM-Common.ps1`, unchanged (#11). A fix now goes in one place. Commands, parameters, prompts and output are the same, apart from one banner line with the Common version.
+- Each script stops with a clear message (exit code 1) when `NSXSM-Common.ps1` is missing or older than 1.0.
+- The help said saved credentials live in the user profile; they are in `creds\<manager>.cred` next to the scripts (since #3).
+- Retested on NSX 4.2.4.1 (F1, F2): the same export as v2.4, Import and Remove as before; Export also on PowerShell 5.1.
 
 ### v2.4 — Export / v2.7 — Import / v1.5 — Remove
 Scale runs S1 to S3 with 500 segments on NSX 9.0.2 (#10, `tests/TESTPLAN.md`):

@@ -33,7 +33,8 @@
     -----------
     On first run you are prompted for username and password, then asked whether
     to save them for future runs. Saved credentials are stored per NSX Manager
-    as an encrypted XML file in your profile directory (Windows DPAPI). On
+    in creds\<manager>.cred next to the scripts (encrypted with DPAPI on
+    Windows, not encrypted on Linux and macOS). On
     subsequent runs a menu offers to reuse, overwrite, or ignore the saved
     credential. Pass -Credential to bypass the interactive flow entirely.
 
@@ -86,7 +87,7 @@
     .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck -WhatIf
 
 .NOTES
-    Version : 1.5
+    Version : 1.6
     API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
     Toolkit : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
     Author  : Paul van Dieen
@@ -98,6 +99,12 @@
 
     Changelog
     ---------
+    1.6 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
+          calls, pickers, prompts and credentials. The script stops with a
+          clear message when NSXSM-Common.ps1 is missing or older than 1.0;
+          the banner shows its version. Commands and parameters are the same.
+          Help: credentials are in creds\ next to the scripts (since #3),
+          not in the user profile.
     1.5 - Scale (#10): attached ports and profile binding maps via the NSX
           search API (one and three calls instead of one and three per
           segment), with -NoSearch and an automatic fallback; when a segment
@@ -146,109 +153,22 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Shared helpers (#11): REST calls, pickers, prompts and credentials live in
+# NSXSM-Common.ps1. Keep it in the same folder as this script.
+$commonPath = Join-Path $PSScriptRoot 'NSXSM-Common.ps1'
+if (-not (Test-Path -LiteralPath $commonPath)) {
+    Write-Host "NSXSM-Common.ps1 not found next to this script ($PSScriptRoot). Copy the whole folder, not just one script." -ForegroundColor Red
+    exit 1
+}
+. $commonPath
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.0') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.0. Copy the whole folder of this release." -ForegroundColor Red
+    exit 1
+}
+
 # =============================================================================
 #  HELPER FUNCTIONS
 # =============================================================================
-
-function Get-BasicAuthHeader {
-    # Builds the Authorization and Content-Type headers for every API call.
-    param([System.Management.Automation.PSCredential]$Cred)
-    $pair    = "$($Cred.UserName):$($Cred.GetNetworkCredential().Password)"
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
-    return @{ Authorization = "Basic $encoded"; 'Content-Type' = 'application/json' }
-}
-
-function Set-TlsSkipCert {
-    # Disables TLS certificate validation for environments with self-signed certs.
-    # Uses a compiled .NET delegate because assigning a PowerShell scriptblock to
-    # ServicePointManager.ServerCertificateValidationCallback is silently ignored
-    # under PS5 / .NET 4.x. The compiled approach works on both PS5 and PS7.
-    if (-not ([System.Management.Automation.PSTypeName]'CertIgnore').Type) {
-        Add-Type @"
-using System.Net;
-using System.Net.Security;
-using System.Security.Cryptography.X509Certificates;
-public static class CertIgnore {
-    public static void Disable() {
-        ServicePointManager.ServerCertificateValidationCallback =
-            (RemoteCertificateValidationCallback) delegate { return true; };
-        ServicePointManager.SecurityProtocol =
-            SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
-    }
-}
-"@
-    }
-    [CertIgnore]::Disable()
-}
-
-function Invoke-NSXApi {
-    # Issues a single REST call to the NSX Manager and returns the parsed JSON
-    # response. Throws on any non-2xx HTTP status so callers can use try/catch.
-    param([string]$Path, [string]$Method = 'GET')
-    $params = @{
-        Uri             = "https://$NSXManager$Path"
-        Method          = $Method
-        Headers         = $script:Headers
-        UseBasicParsing = $true
-    }
-    if ($SkipCertCheck -and $PSVersionTable.PSVersion.Major -ge 6) {
-        $params['SkipCertificateCheck'] = $true
-    }
-    try {
-        $response = Invoke-WebRequest @params
-        if ($response.Content) { return ($response.Content | ConvertFrom-Json) }
-    } catch {
-        $code = if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-            $_.Exception.Response.StatusCode.value__
-        } else { 'N/A' }
-        $msg = Get-NSXErrorText -ErrorRecord $_
-        Write-Verbose "  API error [$Method $Path] -> HTTP $code : $msg"
-        throw "HTTP ${code}: $msg"
-    }
-}
-
-function Get-NSXErrorText {
-    # Returns NSX's own error_message (plus related errors) from a failed call,
-    # or the exception text when the body is not NSX JSON (#10).
-    param($ErrorRecord)
-    $raw = if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) { $ErrorRecord.ErrorDetails.Message } else { '' }
-    if ($raw) {
-        try {
-            $j = $raw | ConvertFrom-Json
-            if ($j.PSObject.Properties['error_message']) {
-                $text = "$($j.error_message)"
-                if ($j.PSObject.Properties['related_errors'] -and $j.related_errors) {
-                    $text += ' ' + ((@($j.related_errors) | ForEach-Object { $_.error_message }) -join ' ')
-                }
-                return $text.Trim()
-            }
-        } catch { }
-        return $raw.Trim()
-    }
-    return $ErrorRecord.Exception.Message
-}
-
-function Get-AllPages {
-    # Follows NSX cursor-based pagination and returns all results as a flat array.
-    # NSX returns a 'cursor' field in the response when more pages are available.
-    # A List instead of += keeps large result sets linear (#10).
-    param([string]$Path)
-    $results = [System.Collections.Generic.List[object]]::new()
-    $cursor  = $null
-    do {
-        $sep  = if ($Path -match '\?') { '&' } else { '?' }
-        $page = if ($cursor) {
-            Invoke-NSXApi -Path "$Path${sep}cursor=$cursor"
-        } else {
-            Invoke-NSXApi -Path $Path
-        }
-        if ($page -and $page.PSObject.Properties['results'] -and $page.results) {
-            foreach ($r in $page.results) { $results.Add($r) }
-        }
-        $cursor = if ($page -and $page.PSObject.Properties['cursor']) { $page.cursor } else { $null }
-    } while ($cursor)
-    return $results.ToArray()
-}
 
 function Get-ChildrenBySearch {
     # One paged search call for every object of the given resource types,
@@ -275,165 +195,6 @@ function Get-SegmentPath {
     param($Seg)
     if ($Seg.PSObject.Properties['path'] -and $Seg.path) { return $Seg.path }
     return "/infra/segments/$($Seg.id)"
-}
-
-# -----------------------------------------------------------------------------
-#  Picker (#10): same behaviour as VIFolderManager and VITagManager. Numbers,
-#  ranges, 'all' (or *), a filter on the whole line (wildcard or /text),
-#  'reset', 'list', 'cancel'. Above $PickerListMax items the list is shortened.
-# -----------------------------------------------------------------------------
-$PickerListMax = 50
-$script:PickerCancelled = $false
-$script:TzNames = @{}
-
-function Get-TransportZoneNames {
-    # id -> display_name of the transport zones on this NSX, for the picker
-    # (on NSX 9 the id is a UUID). Empty when the call fails.
-    $names = @{}
-    try {
-        foreach ($tz in (Get-AllPages -Path '/policy/api/v1/infra/sites/default/enforcement-points/default/transport-zones')) {
-            $names[$tz.id] = if ($tz.PSObject.Properties['display_name']) { $tz.display_name } else { $tz.id }
-        }
-    } catch { Write-Verbose "Transport zone names not read: $_" }
-    return $names
-}
-
-function Test-CancelInput {
-    param([string]$Text)
-    return @('cancel', 'exit', 'quit', 'q') -contains $Text.ToLower()
-}
-
-function Write-PickerList {
-    param([array]$Lines, [switch]$Full)
-    $width = "$($Lines.Count)".Length
-    $fmt   = '  [{0,' + $width + '}] {1}'
-    if ($Full -or $Lines.Count -le $PickerListMax) {
-        for ($i = 0; $i -lt $Lines.Count; $i++) { Write-Host ($fmt -f ($i + 1), $Lines[$i]) }
-        return
-    }
-    for ($i = 0; $i -lt 5; $i++) { Write-Host ($fmt -f ($i + 1), $Lines[$i]) }
-    Write-Host ('  ' + (' ' * ($width + 2)) + " ... $($Lines.Count - 10) more ...") -ForegroundColor DarkGray
-    for ($i = $Lines.Count - 5; $i -lt $Lines.Count; $i++) { Write-Host ($fmt -f ($i + 1), $Lines[$i]) }
-    Write-Host "`n  $($Lines.Count) items: too many to list. Narrow the list with a filter, or type 'list' to show them all." -ForegroundColor Yellow
-}
-
-function Get-SegmentLine {
-    # One picker line per segment: name plus type, gateway and transport zone,
-    # so a filter like /VLAN, /T1:<name> or /TZ:<name> picks a group at once
-    param($Seg)
-    $tags = [System.Collections.Generic.List[string]]::new()
-    $isVlan = $Seg.PSObject.Properties['vlan_ids'] -and $Seg.vlan_ids
-    if ($isVlan) { $tags.Add("VLAN $($Seg.vlan_ids -join ',')") } else { $tags.Add('overlay') }
-    $conn = if ($Seg.PSObject.Properties['connectivity_path'] -and $Seg.connectivity_path) { "$($Seg.connectivity_path)" } else { '' }
-    if ($conn -match '/tier-1s/([^/]+)') { $tags.Add("T1:$($Matches[1])") }
-    elseif ($conn -match '/tier-0s/([^/]+)') { $tags.Add("T0:$($Matches[1])") }
-    elseif (-not $isVlan) { $tags.Add('no gateway') }
-    if ($Seg.PSObject.Properties['transport_zone_path'] -and $Seg.transport_zone_path) {
-        $tzId = Split-Path $Seg.transport_zone_path -Leaf
-        $tzName = if ($script:TzNames -and $script:TzNames.ContainsKey($tzId)) { $script:TzNames[$tzId] } else { $tzId }
-        $tags.Add("TZ:$tzName")
-    }
-    return "$($Seg.display_name)  [$($tags -join '  ')]"
-}
-
-function Select-FromList {
-    # Returns the selected items, sorted by display_name. Returns nothing when
-    # the list is skipped (-AllowSkip and Enter without a filter) or cancelled;
-    # a cancel also sets $script:PickerCancelled.
-    param(
-        [array]$Items,
-        [string]$Title,
-        [scriptblock]$LineText,
-        [switch]$AllowSkip
-    )
-    $sorted = @($Items | Sort-Object display_name)
-    $all    = @(foreach ($it in $sorted) { [pscustomobject]@{ Item = $it; Line = [string](& $LineText $it) } })
-    $view   = $all
-    $filter = ''
-
-    Write-Host ''
-    Write-Host "  $Title ($($all.Count))" -ForegroundColor Yellow
-    Write-Host ''
-    Write-PickerList -Lines @($view | ForEach-Object { $_.Line })
-    Write-Host "`n  Numbers (1,3,5), a range (2-6) or a mix (1,3-5,8); 'all' (or *) takes every item shown;" -ForegroundColor Gray
-    Write-Host "  'cancel' (or exit, quit, q) stops. Filter: a wildcard (*prod*) or /text for a substring, on the" -ForegroundColor Gray
-    Write-Host "  whole line (so also /VLAN, /T1:<name>, /TZ:<name>); 'reset' clears it, 'list' shows every item." -ForegroundColor Gray
-    if ($AllowSkip) { Write-Host "  Enter without a filter skips this list." -ForegroundColor Gray }
-    Write-Host ''
-
-    while ($true) {
-        $prompt = if ($filter) { "  Select (filter: $filter, $($view.Count) shown)" } else { '  Select' }
-        $raw    = Read-Answer $prompt
-        if (Test-CancelInput $raw) {
-            Write-Host '  Cancelled.' -ForegroundColor Yellow
-            $script:PickerCancelled = $true
-            return
-        }
-        if ($raw -eq 'list') { Write-PickerList -Lines @($view | ForEach-Object { $_.Line }) -Full; continue }
-        if ($raw -eq 'reset' -or ($raw -eq '' -and $filter)) {
-            $view = $all; $filter = ''
-            Write-Host "`n  Filter cleared: $($view.Count) item(s)." -ForegroundColor Cyan
-            Write-PickerList -Lines @($view | ForEach-Object { $_.Line })
-            continue
-        }
-        if ($raw -eq '') {
-            if ($AllowSkip) { Write-Host '  Skipped.' -ForegroundColor Gray; return }
-            continue
-        }
-
-        $chosen = $null
-        if ($raw -eq 'all' -or $raw -eq '*') {
-            $chosen = $view
-        } elseif ($raw -match '[*?]' -or $raw.StartsWith('/')) {
-            $pattern = if ($raw.StartsWith('/')) { '*' + [WildcardPattern]::Escape($raw.Substring(1)) + '*' } else { $raw }
-            $hits    = @($all | Where-Object { $_.Line -like $pattern })
-            if ($hits.Count -eq 0) {
-                Write-Host "  Nothing matches '$raw'; the list is unchanged." -ForegroundColor Yellow
-                continue
-            }
-            $view = $hits; $filter = $raw
-            Write-Host "`n  Filter '$filter': $($view.Count) of $($all.Count) item(s), renumbered." -ForegroundColor Cyan
-            Write-PickerList -Lines @($view | ForEach-Object { $_.Line })
-            continue
-        } else {
-            $indices = [System.Collections.Generic.HashSet[int]]::new()
-            $ok      = $true
-            foreach ($token in ($raw -split ',')) {
-                $token = $token.Trim()
-                if ($token -match '^(\d+)-(\d+)$') {
-                    $from = [int]$Matches[1]; $to = [int]$Matches[2]
-                    if ($from -lt 1 -or $to -gt $view.Count -or $from -gt $to) {
-                        Write-Host "  Invalid range '$token': valid is 1-$($view.Count)." -ForegroundColor Red
-                        $ok = $false; break
-                    }
-                    foreach ($n in $from..$to) { [void]$indices.Add($n) }
-                } elseif ($token -match '^\d+$') {
-                    $n = [int]$token
-                    if ($n -lt 1 -or $n -gt $view.Count) {
-                        Write-Host "  Invalid number '$token': valid is 1-$($view.Count)." -ForegroundColor Red
-                        $ok = $false; break
-                    }
-                    [void]$indices.Add($n)
-                } else {
-                    Write-Host "  Unrecognised input '$token'. Use numbers, ranges like 2-5, 'all', or a filter (*text* or /text)." -ForegroundColor Red
-                    $ok = $false; break
-                }
-            }
-            if (-not $ok) { continue }
-            $chosen = @($indices | Sort-Object | ForEach-Object { $view[$_ - 1] })
-        }
-
-        $items = @($chosen | ForEach-Object { $_.Item })
-        Write-Host "`n  Selected $($items.Count) of $($all.Count):" -ForegroundColor Green
-        if ($items.Count -le 20) {
-            $chosen | ForEach-Object { Write-Host "    - $($_.Line)" }
-        } else {
-            $chosen[0..9] | ForEach-Object { Write-Host "    - $($_.Line)" }
-            Write-Host "    ... and $($items.Count - 10) more" -ForegroundColor DarkGray
-        }
-        Write-Host ''
-        return $items
-    }
 }
 
 function Select-Objects {
@@ -488,151 +249,16 @@ function Get-BindingMapsForSegment {
     return $found
 }
 
-function Read-Answer {
-    # Read-Host returns $null when there is no console input (redirected or
-    # closed stdin, a scheduled task). Stop with a clear message instead of
-    # failing on .Trim() of $null (#3).
-    param([string]$Prompt)
-    $answer = Read-Host $Prompt
-    if ($null -eq $answer) {
-        throw "No console input for the prompt '$($Prompt.Trim())'. Run the script in an interactive PowerShell window (pass -Credential to skip the credential prompts)."
-    }
-    return $answer.Trim()
-}
-
-function Get-CredentialPath {
-    # creds\<manager>.cred next to the script, like the other tools (#3).
-    param([string]$Manager)
-    $safe = $Manager -replace '[^a-zA-Z0-9.\-]', '_'
-    return Join-Path (Join-Path $PSScriptRoot 'creds') "$safe.cred"
-}
-
-function Get-LegacyCredentialPath {
-    # Where versions before #3 saved the credential: the user profile.
-    param([string]$Manager)
-    $home_ = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-    return Join-Path $home_ ".nsx_cred_$($Manager -replace '[^a-zA-Z0-9]','_').xml"
-}
-
-function Get-SavedCredential {
-    # Loads a saved credential for the given NSX Manager: creds\<manager>.cred
-    # next to the script, or the old file in the user profile if only that
-    # one exists. Returns the PSCredential, or $null if there is none.
-    param([string]$Manager)
-    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
-        if (Test-Path $path) {
-            try {
-                $cred = Import-Clixml -Path $path
-                if ($path -eq (Get-LegacyCredentialPath -Manager $Manager)) {
-                    Write-Host "      Using the old credential file $path; choose [2] to save it in creds\ next to the script." -ForegroundColor Gray
-                }
-                return $cred
-            } catch { }
-        }
-    }
-    return $null
-}
-
-function Save-Credential {
-    # Saves a credential to creds\<manager>.cred next to the script. On
-    # Windows Export-Clixml encrypts the password with DPAPI (only this user
-    # on this machine can read it); on Linux and macOS it is NOT encrypted.
-    param([System.Management.Automation.PSCredential]$Cred, [string]$Manager)
-    $path = Get-CredentialPath -Manager $Manager
-    $dir  = Split-Path $path -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $Cred | Export-Clixml -Path $path
-    Write-Host "      Credential saved to: $path" -ForegroundColor Gray
-    $onWindows = if (Test-Path Variable:IsWindows) { $IsWindows } else { $true }
-    if (-not $onWindows) {
-        Write-Host "      Note: on this OS the password in that file is not encrypted." -ForegroundColor Yellow
-    }
-}
-
-function Remove-SavedCredential {
-    # Deletes the saved credential file(s) for the given NSX Manager.
-    param([string]$Manager)
-    foreach ($path in (Get-CredentialPath -Manager $Manager), (Get-LegacyCredentialPath -Manager $Manager)) {
-        if (Test-Path $path) {
-            Remove-Item -Path $path -Force
-            Write-Host "      Saved credential removed: $path" -ForegroundColor Gray
-        }
-    }
-}
-
-function Resolve-Credential {
-    # Central credential resolution used by all three scripts.
-    # Resolution order:
-    #   1. -Credential parameter supplied on the command line -> use as-is
-    #   2. Saved credential file found for this NSX Manager  -> offer to use or reset
-    #   3. No credential available                           -> prompt, then offer to save
-    param([System.Management.Automation.PSCredential]$Supplied, [string]$Manager)
-
-    # Command-line credential takes priority - no interaction needed
-    if ($Supplied) { return $Supplied }
-
-    $saved = Get-SavedCredential -Manager $Manager
-
-    if ($saved) {
-        Write-Host ""
-        Write-Host "  Saved credential found for '$Manager' (user: $($saved.UserName))" -ForegroundColor Cyan
-        Write-Host "  [1] Use saved credential"
-        Write-Host "  [2] Enter new credential and save over existing"
-        Write-Host "  [3] Enter new credential without saving"
-        Write-Host ""
-
-        while ($true) {
-            $choice = Read-Answer "  Select"
-            switch ($choice) {
-                '1' {
-                    Write-Host "  Using saved credential." -ForegroundColor Green
-                    Write-Host ""
-                    return $saved
-                }
-                '2' {
-                    $cred = Read-NSXCredential
-                    Save-Credential -Cred $cred -Manager $Manager
-                    return $cred
-                }
-                '3' {
-                    return Read-NSXCredential
-                }
-                default { Write-Host "  Enter 1, 2 or 3" -ForegroundColor Red }
-            }
-        }
-    }
-
-    # No saved credential - prompt and offer to save
-    $cred = Read-NSXCredential
-    Write-Host ""
-    $save = Read-Answer "  Save credential for future runs? (Y/N)"
-    if ($save -eq 'Y' -or $save -eq 'y') {
-        Save-Credential -Cred $cred -Manager $Manager
-    }
-    Write-Host ""
-    return $cred
-}
-
-function Read-NSXCredential {
-    # Prompts for username and password using Read-Host.
-    # Read-Host is used instead of Get-Credential because Get-Credential
-    # can return null in some PowerShell hosts and execution contexts.
-    $user = Read-Answer "  NSX username"
-    $pass = Read-Host "  NSX password" -AsSecureString
-    if ($null -eq $pass) { throw "No console input for the NSX password. Run the script interactively or pass -Credential." }
-    return [System.Management.Automation.PSCredential]::new($user, $pass)
-}
-
 # =============================================================================
 #  SCRIPT METADATA
 # =============================================================================
 
 $ScriptMeta = @{
     Name    = "Remove-NSXSegments.ps1"
-    Version = "1.5"
+    Version = "1.6"
     Author  = "Paul van Dieen"
     Blog    = "https://www.hollebollevsan.nl"
-    Date    = "2026-11-26"
+    Date    = "2026-11-27"
 }
 
 # =============================================================================
@@ -646,6 +272,7 @@ Write-Host ("  {0,-30} {1}" -f $ScriptMeta.Name, ("v" + $ScriptMeta.Version)) -F
 Write-Host ("  Author : {0}" -f $ScriptMeta.Author) -ForegroundColor Cyan
 Write-Host ("  Blog   : {0}" -f $ScriptMeta.Blog) -ForegroundColor Cyan
 Write-Host ("  Date   : {0}" -f $ScriptMeta.Date) -ForegroundColor DarkGray
+Write-Host ("  Common : v{0}" -f $NSXSMCommonVersion) -ForegroundColor DarkGray
 Write-Host ("=" * $bannerWidth) -ForegroundColor DarkCyan
 Write-Host ""
 
