@@ -51,7 +51,7 @@
 
 .NOTES
     Script   : New-NSXSMTestSet.ps1
-    Version  : 1.0.1
+    Version  : 1.0.2
     Author   : Paul van Dieen
     Blog     : https://www.hollebollevsan.nl
     Requires : PowerShell 7+, NSX Manager admin (Policy API)
@@ -59,6 +59,10 @@
 #>
 
 <# CHANGELOG
+v1.0.2  2026-11-27  Paul van Dieen
+- Reads the credential from <manager>.cred next to the toolkit scripts
+  (NSXSM-Common 1.2, #20) first, then creds\ and the user profile.
+
     v1.0.1  2026-11-18  Paul van Dieen
         - Get-Help shows the full help again: the changelog moved out of the
           help block into its own comment block (the unknown .CHANGELOG
@@ -80,7 +84,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$scriptVersion = '1.0.1'
+$scriptVersion = '1.0.2'
 $scriptAuthor  = 'Paul van Dieen'
 $scriptBlogUrl = 'https://www.hollebollevsan.nl'
 $prefix        = 'NSXSM-T-'
@@ -92,9 +96,10 @@ Write-Host '  LAB USE ONLY - touches NSXSM-T-* objects only' -ForegroundColor Ye
 Write-Host ('=' * 62) -ForegroundColor DarkCyan
 
 if (-not $Credential) {
-    # Same files as the toolkit: creds\<manager>.cred in the repo root, or the
+    # Same files as the toolkit: <manager>.cred in the repo root (Common 1.2), creds\<manager>.cred, or the
     # pre-#3 file in the user profile.
     $candidates = @(
+        (Join-Path (Split-Path $PSScriptRoot -Parent) "$($NSXManager -replace '[^a-zA-Z0-9.\-]', '_').cred"),
         (Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'creds') "$($NSXManager -replace '[^a-zA-Z0-9.\-]', '_').cred"),
         (Join-Path $(if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }) ".nsx_cred_$($NSXManager -replace '[^a-zA-Z0-9]','_').xml")
     )

@@ -128,6 +128,19 @@ Not tested: an export with a custom zone whose id doesn't exist on the target (t
 | U8 | N4 to NB | Full dry run without parameters, with a saved credential (manager picked by number), then Export and Remove without parameters | **pass** (credentials saved again by hand, now `<manager>.cred` next to the scripts): the manager list shows the three saved managers newest first; Import (export picked from the list, lab B as `1`, `overlay-vds01-mgmt-01a`) dry run box with "Transport zone : overlay-vds01-mgmt-01a [OVERLAY_BACKED], chosen at the menu", exit 0; Export from N4 (`3`): box with full paths (shortened from the left at the console width), the next command with the full path, exit 0; Remove on lab B (`1`) `-WhatIf`, both lists skipped: "Nothing selected", exit 0 |
 | U9 | NA | Export without parameters, lab A (`2`) while it is down | **pass**: "ERROR: HTTP N/A: A connection attempt failed ...", one line, exit 1 |
 
+**Import 3.2 (#22), 2026-11-27:** gateway check. Found by Paul: `NSXSM-T-Ovl-GW1` and `-GW2` from N4 into NB without `-Disconnected` and without a Tier-1 mapping gave 5 profiles OK and then 2x "HTTP 404 ... /infra/tier-1s/NSXSM-T-T1 could not be found". N4 export of `NSXSM-T-*`, target NB, zone `overlay-vds01-mgmt-01a`; G1 to G7 dry runs.
+
+| # | Steps | Result |
+|---|---|---|
+| G1 | GW1 + GW2, `D` at the gateway check | **pass**: "Gateway /infra/tier-1s/NSXSM-T-T1 is not on nsx-mgmt-a.site-a.vcf.two", used by 2 segments, list `[1] [T0] t0-mgmt-a`, `[2] [T1] t1-mgmt-a`, `[D]`, `[S]`; overlay check "Gateway : none, imported without one"; 2 would be written; cutover table "(chosen at the gateway check)" with `/infra/tier-1s/NSXSM-T-T1` and the subnets |
+| G2 | Same, `S` | **pass**: "Nothing imported: all selected segments were skipped at the gateway check.", exit 0, nothing written |
+| G3 | Same, `2` (`t1-mgmt-a`) | **pass**: overlay check "Gateway : /infra/tier-1s/847ece30-... (on the target)", 2 would be written |
+| G4 | CSV `T1Gateway` NewName = `t1-mgmt-a` (the name), then = its UUID | **pass**: by name "Tier-1 't1-mgmt-a' found by its name on the target: /infra/tier-1s/847ece30-..."; by id "All gateways exist on the target"; no question either way |
+| G5 | `cancel` at the gateway check | **pass**: "Nothing imported.", exit 0 |
+| G6 | GW1 + `Ovl-NoGW`, `S` | **pass**: only NoGW would be written; "Skipped at the gateway check (gateway not on the target): NSXSM-T-Ovl-GW1" |
+| G7 | `-Disconnected` | **pass**: no gateway check, cutover table "(-Disconnected)" as before |
+| G8 | G3 for real (no `-WhatIf`), then `New-NSXSMTestSet.ps1 -Mode Show` and Remove | **pass**: 2 segments OK, 3 binding maps OK, 5 profiles already there (left by the run above); Show: both on `847ece30-...` with their subnets, GW1 with all five profiles. Remove (typed `YES`) of the 2 segments and the 5 profiles, NB clean again. `New-NSXSMTestSet.ps1` first failed with "No credential file found (...\creds\...)": it still looked in `creds\` only; fixed in 1.0.2 (and the scale set script in 0.1.1) |
+
 ## Open points
 
 - The search API route (Export 2.4, Remove 1.5) ran against NSX 4.2.4.1 on
