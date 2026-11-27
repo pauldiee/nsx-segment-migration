@@ -25,14 +25,29 @@
     copy.
 
 .NOTES
-    Version : 1.2
-    Author  : Paul van Dieen
-    Blog    : https://www.hollebollevsan.nl
-    GitHub  : https://github.com/pauldiee/nsx-segment-migration
+    Script   : NSXSM-Common.ps1
+    Version  : 1.3.0
+    Author   : Paul van Dieen
+    Blog     : https://www.hollebollevsan.nl
+    Requires : PowerShell 5.1 or later; dot-sourced by Export-, Import- and Remove-NSXSegments.ps1 from the same folder
+    Tested   : Lab, 2026-11-27: NSX 4.2.4.1 (home lab) and NSX 9.0.2 (Holodeck lab B),
+               PowerShell 7 and 5.1; NSX 9.1.1 (Holodeck lab A) up to 2026-11-16.
+               See tests/TESTPLAN.md
+    GitHub   : https://github.com/pauldiee/nsx-segment-migration
+#>
 
-    Changelog
-    ---------
-    1.2 - Interactive start and layout: Read-NSXManager (saved managers as
+<# CHANGELOG
+    v1.3.0  2026-11-27  Paul van Dieen
+        - Versions as x.y.z ($NSXSMCommonVersion 1.3.0) and this changelog
+          in its own block (#24).
+        - Every "no console input" stop starts with "No console input" (the
+          password prompt too), so the scripts can exit with 2 for it, as
+          the vCenter toolkits do (#24).
+        - Picker line: a VLAN segment without a gateway also says "no
+          gateway", so /no gateway picks every segment without one (#24).
+
+    v1.2.0  2026-11-27  Paul van Dieen
+        - Interactive start and layout: Read-NSXManager (saved managers as
           numbers, or a name), Select-ExportFile (exports in the current and
           script folder with source, date and counts), Test-NSXConnection
           (offers to go on without the certificate check when it is not
@@ -41,13 +56,17 @@
           next to the scripts, as in the vCenter toolkits; creds\ (1.0/1.1)
           and the user profile are still read. Without a console, the
           password prompt stops with a message instead of waiting forever.
-    1.1 - Invoke-NSXApi: a call that gets no HTTP answer (untrusted
+
+    v1.1.0  2026-11-27  Paul van Dieen
+        - Invoke-NSXApi: a call that gets no HTTP answer (untrusted
           certificate, DNS, refused connection) showed "The property
           'Response' cannot be found on this object" instead of the real
-          error, because StrictMode stops on the missing property (#18).
-          The real error is shown now, with a hint to -SkipCertCheck when
-          the certificate is not trusted.
-    1.0 - The helpers that Export 2.4, Import 2.7 and Remove 1.5 each
+          error, because StrictMode stops on the missing property (#18). The
+          real error is shown now, with a hint to -SkipCertCheck when the
+          certificate is not trusted.
+
+    v1.0.0  2026-11-27  Paul van Dieen
+        - The helpers that Export 2.4, Import 2.7 and Remove 1.5 each
           carried as their own copy, moved here unchanged (#11). Taken from
           Import 2.7; the copies differed only in comments and in
           Invoke-NSXApi's -Body parameter, which Export and Remove don't
@@ -58,7 +77,7 @@ Set-StrictMode -Version Latest
 
 # Read by the scripts: they stop when this file is older than they need,
 # and show it in their banner.
-$NSXSMCommonVersion = '1.2'
+$NSXSMCommonVersion = '1.3.0'
 
 # =============================================================================
 #  REST
@@ -229,7 +248,7 @@ function Get-SegmentLine {
     $conn = if ($Seg.PSObject.Properties['connectivity_path'] -and $Seg.connectivity_path) { "$($Seg.connectivity_path)" } else { '' }
     if ($conn -match '/tier-1s/([^/]+)') { $tags.Add("T1:$($Matches[1])") }
     elseif ($conn -match '/tier-0s/([^/]+)') { $tags.Add("T0:$($Matches[1])") }
-    elseif (-not $isVlan) { $tags.Add('no gateway') }
+    else { $tags.Add('no gateway') }   # VLAN too, so /no gateway picks them all (#24)
     if ($Seg.PSObject.Properties['transport_zone_path'] -and $Seg.transport_zone_path) {
         $tzId = Split-Path $Seg.transport_zone_path -Leaf
         $tzName = if ($script:TzNames -and $script:TzNames.ContainsKey($tzId)) { $script:TzNames[$tzId] } else { $tzId }
@@ -481,7 +500,7 @@ function Read-NSXCredential {
     $user = Read-Answer "  NSX username"
     # Read-Host -AsSecureString reads the console, not a redirected stdin:
     # without a console it would wait forever (1.2)
-    if (-not (Test-InteractiveInput)) { throw "The NSX password can only be typed in an interactive PowerShell window. Run the script there once and save the credential, or pass -Credential." }
+    if (-not (Test-InteractiveInput)) { throw "No console input for the NSX password: it can only be typed in an interactive PowerShell window. Run the script there once and save the credential, or pass -Credential." }
     $pass = Read-Host "  NSX password" -AsSecureString
     if ($null -eq $pass) { throw "No console input for the NSX password. Run the script interactively or pass -Credential." }
     return [System.Management.Automation.PSCredential]::new($user, $pass)

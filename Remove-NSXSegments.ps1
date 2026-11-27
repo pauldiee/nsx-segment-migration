@@ -88,39 +88,60 @@
     .\Remove-NSXSegments.ps1 -NSXManager nsx.corp.local -SkipCertCheck -WhatIf
 
 .NOTES
-    Version : 1.8
-    API     : NSX Policy REST API v1 (compatible with NSX 4.x and 9.x)
-    Toolkit : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
-    Author  : Paul van Dieen
-    Blog    : https://www.hollebollevsan.nl
-    GitHub  : https://github.com/pauldiee/nsx-segment-migration
+    Script   : Remove-NSXSegments.ps1
+    Version  : 1.9.0
+    Author   : Paul van Dieen
+    Blog     : https://www.hollebollevsan.nl
+    Requires : PowerShell 5.1 or later (7 recommended); NSXSM-Common.ps1 1.3.0 in the same folder; no PowerCLI
+    Tested   : Lab, 2026-11-27: NSX 4.2.4.1 (home lab) and NSX 9.0.2 (Holodeck lab B),
+               PowerShell 7 and 5.1; NSX 9.1.1 (Holodeck lab A) up to 2026-11-16.
+               See tests/TESTPLAN.md
+    API      : NSX Policy REST API v1 (NSX 4.x and 9.x)
+    Toolkit  : Export-NSXSegments.ps1 / Import-NSXSegments.ps1
+    GitHub   : https://github.com/pauldiee/nsx-segment-migration
 
-    Exit codes: 0 done, nothing selected, aborted or dry run; 1 fatal error;
-    2 finished with errors.
+    Exit codes: 0 done, nothing selected, aborted or dry run; 1 something
+    failed (a fatal error, or a segment or profile could not be deleted);
+    2 stopped because a prompt needed console input.
+#>
 
-    Changelog
-    ---------
-    1.8 - Interactive start (#20): without -NSXManager the script asks for
+<# CHANGELOG
+    v1.9.0  2026-11-27  Paul van Dieen
+        - Exit codes as in the vCenter toolkits (#24): a segment or profile
+          that could not be deleted now gives 1 (was 2); 2 means a prompt
+          needed console input and there was none (was 1).
+        - Script header as in the other toolkits (#24): this changelog in
+          its own block with x.y.z versions, .NOTES with Requires and
+          Tested, $scriptVersion / $scriptAuthor / $scriptBlogUrl for the
+          banner. Needs NSXSM-Common.ps1 1.3.0.
+
+    v1.8.0  2026-11-27  Paul van Dieen
+        - Interactive start (#20): without -NSXManager the script asks for
           it (managers with a saved credential as numbers). The summary box
-          fits its content and names the manager.
-          The real error as one red ERROR: line instead of a PowerShell
-          error record. An untrusted certificate without -SkipCertCheck:
-          asks whether to go on without the check for this run. Saved
-          credentials as <manager>.cred next to the scripts, as in the
-          vCenter toolkits (creds\ and the profile file are still read).
-          Needs NSXSM-Common.ps1 1.2.
-    1.7 - Closing line from the counts (#13): "n of m selected object(s)
+          fits its content and names the manager. The real error as one red
+          ERROR: line instead of a PowerShell error record. An untrusted
+          certificate without -SkipCertCheck: asks whether to go on without
+          the check for this run. Saved credentials as <manager>.cred next
+          to the scripts, as in the vCenter toolkits (creds\ and the profile
+          file are still read). Needs NSXSM-Common.ps1 1.2.
+
+    v1.7.0  2026-11-27  Paul van Dieen
+        - Closing line from the counts (#13): "n of m selected object(s)
           deleted; k declined at -Confirm and kept" instead of "All selected
           objects deleted successfully" when something was declined. A
           declined segment or profile is reported as [DECLINED] and counted
           in the summary.
-    1.6 - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
+
+    v1.6.0  2026-11-27  Paul van Dieen
+        - Shared helpers moved to NSXSM-Common.ps1 (#11), unchanged: REST
           calls, pickers, prompts and credentials. The script stops with a
           clear message when NSXSM-Common.ps1 is missing or older than 1.0;
-          the banner shows its version. Commands and parameters are the same.
-          Help: credentials are in creds\ next to the scripts (since #3),
-          not in the user profile.
-    1.5 - Scale (#10): attached ports and profile binding maps via the NSX
+          the banner shows its version. Commands and parameters are the
+          same. Help: credentials are in creds\ next to the scripts (since
+          #3), not in the user profile.
+
+    v1.5.0  2026-11-26  Paul van Dieen
+        - Scale (#10): attached ports and profile binding maps via the NSX
           search API (one and three calls instead of one and three per
           segment), with -NoSearch and an automatic fallback; when a segment
           DELETE fails after a search read, its binding maps are read
@@ -132,23 +153,33 @@
           VITagManager: filter on the whole line (wildcard or /text: /VLAN,
           /T1:<name>, /TZ:<name>), 'reset', 'list', 'all', 'cancel' (stops
           the run, nothing deleted); long lists are shortened.
-    1.4 - Get-Help shows the full help again: blank line between
-          #Requires and the help block (without it Get-Help ignored
-          the whole help block).
-    1.3 - Prompts without console input stop with a clear message instead
-          of failing on .Trim() of $null. Credentials are saved in
+
+    v1.4.0  2026-11-18  Paul van Dieen
+        - Get-Help shows the full help again: blank line between #Requires
+          and the help block (without it Get-Help ignored the whole help
+          block).
+
+    v1.3.0  2026-11-16  Paul van Dieen
+        - Prompts without console input stop with a clear message instead of
+          failing on .Trim() of $null. Credentials are saved in
           creds\<manager>.cred next to the script; the old file in the user
           profile is still read (#3).
-    1.2 - Added built-in credential save/reset via Resolve-Credential.
-          Replaced Get-Credential with Read-Host to fix null credential errors
-          in non-interactive PowerShell hosts under Set-StrictMode.
+
+    v1.2.0  2026-03-18  Paul van Dieen
+        - Added built-in credential save/reset via Resolve-Credential.
+          Replaced Get-Credential with Read-Host to fix null credential
+          errors in non-interactive PowerShell hosts under Set-StrictMode.
           Added $ScriptMeta branding banner (Name, Author, Blog, Date).
-    1.1 - Added port count check before confirmation prompt.
-          Fixed extra confirmation prompts by removing ConfirmImpact = High.
-          Binding map deletion no longer triggers ShouldProcess prompts.
-    1.0 - Initial release. Interactive segment and profile selection menus.
-          Automatic binding map removal before segment deletion.
-          Typed YES confirmation gate. WhatIf support.
+
+    v1.1.0  2026-03-18  Paul van Dieen
+        - Added port count check before confirmation prompt. Fixed extra
+          confirmation prompts by removing ConfirmImpact = High. Binding map
+          deletion no longer triggers ShouldProcess prompts.
+
+    v1.0.0  2026-03-18  Paul van Dieen
+        - Initial release. Interactive segment and profile selection menus.
+          Automatic binding map removal before segment deletion. Typed YES
+          confirmation gate. WhatIf support.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -175,14 +206,15 @@ if (-not (Test-Path -LiteralPath $commonPath)) {
     exit 1
 }
 . $commonPath
-if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.2') {
-    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.2. Copy the whole folder of this release." -ForegroundColor Red
+if (-not (Test-Path Variable:NSXSMCommonVersion) -or [version]$NSXSMCommonVersion -lt [version]'1.3.0') {
+    Write-Host "NSXSM-Common.ps1 next to this script is older than 1.3.0. Copy the whole folder of this release." -ForegroundColor Red
     exit 1
 }
 
 # A fatal error as one clear line instead of a PowerShell error record
 # pointing into NSXSM-Common.ps1; exit code 1 as before
-trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+# Exit codes as in the vCenter toolkits (#24): 2 when a prompt had no console input, 1 otherwise
+trap { Write-Host ''; Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; if ($_.Exception.Message -like 'No console input*') { exit 2 }; exit 1 }
 
 # =============================================================================
 #  HELPER FUNCTIONS
@@ -271,11 +303,15 @@ function Get-BindingMapsForSegment {
 #  SCRIPT METADATA
 # =============================================================================
 
+$scriptVersion = '1.9.0'
+$scriptAuthor  = 'Paul van Dieen'
+$scriptBlogUrl = 'https://www.hollebollevsan.nl'
+
 $ScriptMeta = @{
     Name    = "Remove-NSXSegments.ps1"
-    Version = "1.8"
-    Author  = "Paul van Dieen"
-    Blog    = "https://www.hollebollevsan.nl"
+    Version = $scriptVersion
+    Author  = $scriptAuthor
+    Blog    = $scriptBlogUrl
     Date    = "2026-11-27"
 }
 
@@ -642,6 +678,7 @@ if ($errList.Count -gt 0) {
     Write-Host "$deleted of $selected selected object(s) deleted; $declined declined at -Confirm and kept.`n" -ForegroundColor $color
 }
 
-# Exit codes (#10): 0 done, 1 fatal error (thrown), 2 finished with errors
-if ($totalErrors -gt 0) { exit 2 }
+# Exit codes (#24, as in the vCenter toolkits): 0 done, 1 something failed
+# (thrown, or a segment/profile failed), 2 no console input (trap)
+if ($totalErrors -gt 0) { exit 1 }
 exit 0
